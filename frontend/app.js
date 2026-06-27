@@ -323,11 +323,12 @@ async function loadSettings() {
   try {
     const res = await fetch(API_BASE + '/api/settings');
     const s   = await res.json();
-    document.getElementById('cfg-work-start').value = s.default_work_start?.value || '08:00';
-    document.getElementById('cfg-checkout').value   = s.default_checkout?.value   || '17:00';
-    document.getElementById('cfg-grace').value      = s.default_grace?.value      || '15';
-    document.getElementById('cfg-salary').value     = s.default_salary?.value     || '0';
-    document.getElementById('cfg-bonus').value      = s.default_bonus?.value      || '0';
+    document.getElementById('cfg-work-start').value  = s.default_work_start?.value || '08:00';
+    document.getElementById('cfg-checkout').value    = s.default_checkout?.value   || '17:00';
+    document.getElementById('cfg-grace').value       = s.default_grace?.value      || '15';
+    document.getElementById('cfg-salary').value      = s.default_salary?.value     || '0';
+    document.getElementById('cfg-bonus').value       = s.default_bonus?.value      || '0';
+    document.getElementById('cfg-line-token').value  = s.line_notify_token?.value  || '';
   } catch(e) {}
 }
 
@@ -338,6 +339,7 @@ async function saveSettings() {
     default_grace:      document.getElementById('cfg-grace').value,
     default_salary:     document.getElementById('cfg-salary').value,
     default_bonus:      document.getElementById('cfg-bonus').value,
+    line_notify_token:  document.getElementById('cfg-line-token').value,
   };
   const res    = await fetch(API_BASE + '/api/settings', {
     method: 'POST',

@@ -1,6 +1,27 @@
-const express = require('express');
+const express  = require('express');
+const https    = require('https');
 const { Pool } = require('pg');
 const app = express();
+
+async function sendLineNotify(token, message) {
+  if (!token) return;
+  const body = new URLSearchParams({ message }).toString();
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'notify-api.line.me',
+      path:     '/api/notify',
+      method:   'POST',
+      headers: {
+        'Authorization':  'Bearer ' + token,
+        'Content-Type':   'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, (res) => { res.on('data', () => {}); res.on('end', resolve); });
+    req.on('error', resolve);
+    req.write(body);
+    req.end();
+  });
+}
 
 app.use(express.json());
 
@@ -78,6 +99,11 @@ async function initDB() {
       ('default_grace',      '15',    'ผ่อนผัน (นาที)'),
       ('default_salary',     '0',     'ฐานเดือนค่าเริ่มต้น'),
       ('default_bonus',      '0',     'เบี้ยขยันค่าเริ่มต้น')
+    ON CONFLICT (key) DO NOTHING;
+  `);
+  await pool.query(`
+    INSERT INTO system_settings (key, value, label) VALUES
+      ('line_notify_token', '', 'LINE Notify Token')
     ON CONFLICT (key) DO NOTHING;
   `);
 
@@ -159,6 +185,19 @@ app.post('/api/attendance', async (req, res) => {
     'INSERT INTO attendance_logs (device_id, finger_id, name, check_type, is_late) VALUES ($1,$2,$3,$4,$5)',
     [device_id, finger_id, name, check_type, is_late]
   );
+
+  // LINE Notify
+  const tokenRow = await pool.query(`SELECT value FROM system_settings WHERE key='line_notify_token'`);
+  const lineToken = tokenRow.rows[0]?.value;
+  if (lineToken) {
+    const th    = toTH(new Date());
+    const hhmm  = `${String(th.getUTCHours()).padStart(2,'0')}:${String(th.getUTCMinutes()).padStart(2,'0')}`;
+    const typeIcon = check_type === 'IN' ? '🟢 เข้างาน' : '🔴 ออกงาน';
+    const lateText = (check_type === 'IN' && is_late) ? '  ⚠️ สาย!' : '';
+    const msg = `\n${typeIcon}${lateText}\n👤 ${name}\n🕐 ${hhmm}\n📍 ${device_id}`;
+    sendLineNotify(lineToken, msg).catch(() => {});
+  }
+
   res.json({ success: true, status: 'ok', name, finger_id, check_type, is_late });
 });
 
