@@ -35,18 +35,13 @@ async function initDB() {
       name        VARCHAR(100) NOT NULL,
       employee_id VARCHAR(20),
       department  VARCHAR(50),
-      confidence  INTEGER DEFAULT 0,
-      enrolled    BOOLEAN DEFAULT FALSE,
-      fp_pattern  TEXT,
       created_at  TIMESTAMP DEFAULT NOW()
     );
   `);
-  await pool.query(`
-    ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS enrolled BOOLEAN DEFAULT FALSE;
-  `);
-  await pool.query(`
-    UPDATE fp_users SET enrolled = TRUE WHERE confidence > 0;
-  `);
+  await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS confidence INTEGER DEFAULT 0;`);
+  await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS enrolled BOOLEAN DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS fp_pattern TEXT;`);
+  await pool.query(`UPDATE fp_users SET enrolled = TRUE WHERE confidence > 0;`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS attendance_logs (
       id          SERIAL PRIMARY KEY,
