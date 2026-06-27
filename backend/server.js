@@ -62,6 +62,7 @@ async function initDB() {
     );
   `);
   await pool.query(`ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS check_type VARCHAR(3) DEFAULT 'IN';`);
+  await pool.query(`ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS is_late BOOLEAN DEFAULT FALSE;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS system_settings (
@@ -155,8 +156,8 @@ app.post('/api/attendance', async (req, res) => {
   }
 
   await pool.query(
-    'INSERT INTO attendance_logs (device_id, finger_id, name, check_type) VALUES ($1,$2,$3,$4)',
-    [device_id, finger_id, name, check_type]
+    'INSERT INTO attendance_logs (device_id, finger_id, name, check_type, is_late) VALUES ($1,$2,$3,$4,$5)',
+    [device_id, finger_id, name, check_type, is_late]
   );
   res.json({ success: true, status: 'ok', name, finger_id, check_type, is_late });
 });
@@ -261,7 +262,7 @@ app.delete('/api/users/:finger_id', async (req, res) => {
 // WEB — logs (include check_type)
 app.get('/api/logs', async (req, res) => {
   const result = await pool.query(`
-    SELECT id, device_id, finger_id, name, check_time, check_type
+    SELECT id, device_id, finger_id, name, check_time, check_type, is_late
     FROM attendance_logs ORDER BY check_time DESC LIMIT 100
   `);
   res.json(result.rows);

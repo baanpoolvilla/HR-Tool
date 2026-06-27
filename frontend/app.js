@@ -76,7 +76,7 @@ async function loadLogs() {
 
   const tbody = document.getElementById('logs-body');
   if (!logs.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;padding:20px">ยังไม่มีบันทึก</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#999;padding:20px">ยังไม่มีบันทึก</td></tr>';
     return;
   }
   tbody.innerHTML = logs.map((l, i) => {
@@ -84,6 +84,11 @@ async function loadLogs() {
     const badge  = isOut
       ? '<span class="badge" style="background:#fff3e0;color:#e65100">🚪 OUT</span>'
       : '<span class="badge badge-in">✅ IN</span>';
+    const lateBadge = isOut
+      ? '<span style="color:#bbb">-</span>'
+      : (l.is_late
+          ? '<span class="badge" style="background:#fce4ec;color:#c62828">⏰ สาย</span>'
+          : '<span class="badge" style="background:#e8f5e9;color:#2e7d32">✅ ตรงเวลา</span>');
     return `
     <tr>
       <td>${i + 1}</td>
@@ -92,6 +97,7 @@ async function loadLogs() {
       <td>${l.device_id}</td>
       <td>${fmtTime(l.check_time)}</td>
       <td>${badge}</td>
+      <td>${lateBadge}</td>
     </tr>`;
   }).join('');
 }
