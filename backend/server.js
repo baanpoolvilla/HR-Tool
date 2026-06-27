@@ -3,9 +3,40 @@ const https    = require('https');
 const { Pool } = require('pg');
 const app = express();
 
-async function sendLineMessage(token, to, message) {
+function buildFlexCard(name, hhmm, device_id, check_type, is_late) {
+  const isOut      = check_type === 'OUT';
+  const color      = isOut ? '#1565C0' : (is_late ? '#C62828' : '#2E7D32');
+  const headerText = isOut ? '🔴  ออกงาน' : (is_late ? '⚠️  เข้างาน  (สาย!)' : '✅  เข้างาน');
+  return {
+    type: 'bubble', size: 'kilo',
+    header: {
+      type: 'box', layout: 'vertical',
+      backgroundColor: color, paddingAll: '14px',
+      contents: [{ type: 'text', text: headerText, color: '#FFFFFF', size: 'lg', weight: 'bold' }]
+    },
+    body: {
+      type: 'box', layout: 'vertical', spacing: 'md', paddingAll: '14px',
+      contents: [
+        { type: 'box', layout: 'horizontal', spacing: 'md', contents: [
+            { type: 'text', text: '👤', size: 'sm', flex: 0 },
+            { type: 'text', text: name, size: 'sm', weight: 'bold', flex: 1 }
+        ]},
+        { type: 'box', layout: 'horizontal', spacing: 'md', contents: [
+            { type: 'text', text: '🕐', size: 'sm', flex: 0 },
+            { type: 'text', text: hhmm, size: 'sm', weight: 'bold', flex: 1 }
+        ]},
+        { type: 'box', layout: 'horizontal', spacing: 'md', contents: [
+            { type: 'text', text: '📍', size: 'sm', flex: 0 },
+            { type: 'text', text: device_id, size: 'sm', color: '#888888', flex: 1 }
+        ]},
+      ]
+    }
+  };
+}
+
+async function sendLineFlex(token, to, altText, flexContent) {
   if (!token || !to) return;
-  const body = JSON.stringify({ to, messages: [{ type: 'text', text: message }] });
+  const body = JSON.stringify({ to, messages: [{ type: 'flex', altText, contents: flexContent }] });
   return new Promise((resolve) => {
     const req = https.request({
       hostname: 'api.line.me',
@@ -195,12 +226,11 @@ app.post('/api/attendance', async (req, res) => {
   const lineToken = tokenRow.rows[0]?.value;
   const lineUser  = groupRow.rows[0]?.value;
   if (lineToken && lineUser) {
-    const th       = toTH(new Date());
-    const hhmm     = `${String(th.getUTCHours()).padStart(2,'0')}:${String(th.getUTCMinutes()).padStart(2,'0')}`;
-    const typeIcon = check_type === 'IN' ? '🟢 เข้างาน' : '🔴 ออกงาน';
-    const lateText = (check_type === 'IN' && is_late) ? '  ⚠️ สาย!' : '';
-    const msg = `${typeIcon}${lateText}\n👤 ${name}\n🕐 ${hhmm}\n📍 ${device_id}`;
-    sendLineMessage(lineToken, lineUser, msg).catch(() => {});
+    const th      = toTH(new Date());
+    const hhmm    = `${String(th.getUTCHours()).padStart(2,'0')}:${String(th.getUTCMinutes()).padStart(2,'0')}`;
+    const altText = check_type === 'OUT' ? `🔴 ออกงาน - ${name}` : (is_late ? `⚠️ เข้างาน สาย - ${name}` : `✅ เข้างาน - ${name}`);
+    const flex    = buildFlexCard(name, hhmm, device_id, check_type, is_late);
+    sendLineFlex(lineToken, lineUser, altText, flex).catch(() => {});
   }
 
   res.json({ success: true, status: 'ok', name, finger_id, check_type, is_late });
