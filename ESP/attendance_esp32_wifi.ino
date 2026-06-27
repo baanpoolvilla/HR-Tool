@@ -64,6 +64,7 @@ unsigned long lastPoll      = 0;
 unsigned long lastWifiCheck = 0;
 
 volatile bool clockEnabled = true;  // false = ห้าม clock task วาดทับ
+SemaphoreHandle_t oledMutex = NULL; // ป้องกัน Core 0 / Core 1 เขียน I2C พร้อมกัน
 
 // ===== เวลา =====
 String getTimeStr() {
@@ -87,7 +88,9 @@ String getDateStr() {
 
 // ===== หน้าจอ =====
 void showMain() {
-  if (!oledOK) return;
+  if (!oledOK || !oledMutex) return;
+  // ถ้า Core 1 กำลังใช้ display อยู่ → ข้ามเฟรมนี้ไปแทนที่จะรอ
+  if (xSemaphoreTake(oledMutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
   display.clearDisplay();
   display.fillRect(0, 0, 128, 13, SSD1306_WHITE);
   display.setTextColor(SSD1306_BLACK);
@@ -113,10 +116,12 @@ void showMain() {
   if (WiFi.status() != WL_CONNECTED)
     display.drawCircle(122, 56, 3, SSD1306_WHITE);
   display.display();
+  xSemaphoreGive(oledMutex);
 }
 
 void showMsg(String l1, String l2 = "", String l3 = "", bool inv = false) {
-  if (!oledOK) return;
+  if (!oledOK || !oledMutex) return;
+  xSemaphoreTake(oledMutex, portMAX_DELAY);
   display.clearDisplay();
   if (inv) { display.fillRect(0,0,128,64,SSD1306_WHITE); display.setTextColor(SSD1306_BLACK); }
   else display.setTextColor(SSD1306_WHITE);
@@ -125,10 +130,12 @@ void showMsg(String l1, String l2 = "", String l3 = "", bool inv = false) {
   display.setCursor(0, 24); display.println(l2);
   display.setCursor(0, 44); display.println(l3);
   display.display();
+  xSemaphoreGive(oledMutex);
 }
 
 void showCheckin(String name, int id, String checkType, bool isLate = false) {
-  if (!oledOK) return;
+  if (!oledOK || !oledMutex) return;
+  xSemaphoreTake(oledMutex, portMAX_DELAY);
   display.clearDisplay();
   display.fillRect(0, 0, 128, 14, SSD1306_WHITE);
   display.setTextColor(SSD1306_BLACK);
@@ -150,10 +157,12 @@ void showCheckin(String name, int id, String checkType, bool isLate = false) {
   display.setCursor(0, 54);
   display.print(getDateStr());
   display.display();
+  xSemaphoreGive(oledMutex);
 }
 
 void showEnroll(int id, int step, String msg) {
-  if (!oledOK) return;
+  if (!oledOK || !oledMutex) return;
+  xSemaphoreTake(oledMutex, portMAX_DELAY);
   display.clearDisplay();
   display.fillRect(0, 0, 128, 14, SSD1306_WHITE);
   display.setTextColor(SSD1306_BLACK);
@@ -170,10 +179,12 @@ void showEnroll(int id, int step, String msg) {
   display.setCursor(0, 52);
   display.print(msg);
   display.display();
+  xSemaphoreGive(oledMutex);
 }
 
 void showNotFound() {
-  if (!oledOK) return;
+  if (!oledOK || !oledMutex) return;
+  xSemaphoreTake(oledMutex, portMAX_DELAY);
   display.clearDisplay();
   display.fillRect(0, 0, 128, 14, SSD1306_WHITE);
   display.setTextColor(SSD1306_BLACK);
@@ -190,6 +201,7 @@ void showNotFound() {
   display.setCursor(0, 54);
   display.print("Contact admin");
   display.display();
+  xSemaphoreGive(oledMutex);
 }
 
 // ===== HTTP helper พร้อม timeout =====
@@ -197,7 +209,7 @@ bool httpPost(String url, String body, String &respOut) {
   if (WiFi.status() != WL_CONNECTED) return false;
   HTTPClient http;
   http.begin(url);
-  http.setTimeout(8000);
+  http.setTimeout(5000);
   http.addHeader("Content-Type", "application/json");
   int code = http.POST(body);
   bool ok = (code == 200 || code == 201);
@@ -210,7 +222,7 @@ bool httpGet(String url, String &respOut) {
   if (WiFi.status() != WL_CONNECTED) return false;
   HTTPClient http;
   http.begin(url);
-  http.setTimeout(8000);
+  http.setTimeout(5000);
   int code = http.GET();
   bool ok = (code == 200);
   if (ok) respOut = http.getString();
@@ -284,27 +296,39 @@ bool enrollFinger(int id) {
 
   int r, tries = 0;
   while ((r = finger.getImage()) != FINGERPRINT_OK) {
-    if (tries++ > 150) { showMsg("Timeout!", "Try again", ""); beepFail(); return false; }
+    esp_task_wdt_reset();
+    if (tries++ > 100) {
+      showMsg("Timeout!", "Try again", "");
+      beepFail();
+      clockEnabled = true;
+      return false;
+    }
     delay(200);
   }
-  if (finger.image2Tz(1) != FINGERPRINT_OK) { beepFail(); return false; }
+  if (finger.image2Tz(1) != FINGERPRINT_OK) {
+    beepFail(); clockEnabled = true; return false;
+  }
 
   showEnroll(id, 1, "Remove finger...");
   beepOK();
   delay(1500);
-  while (finger.getImage() != FINGERPRINT_NOFINGER) delay(200);
+  while (finger.getImage() != FINGERPRINT_NOFINGER) {
+    esp_task_wdt_reset();
+    delay(200);
+  }
 
   showEnroll(id, 2, "Place same finger");
   delay(1000);
 
   tries = 0;
   while ((r = finger.getImage()) != FINGERPRINT_OK) {
-    if (tries++ > 150) { beepFail(); return false; }
+    esp_task_wdt_reset();
+    if (tries++ > 100) { beepFail(); clockEnabled = true; return false; }
     delay(200);
   }
-  if (finger.image2Tz(2) != FINGERPRINT_OK)  { beepFail(); return false; }
-  if (finger.createModel() != FINGERPRINT_OK) { beepFail(); return false; }
-  if (finger.storeModel(id) != FINGERPRINT_OK){ beepFail(); return false; }
+  if (finger.image2Tz(2) != FINGERPRINT_OK)  { beepFail(); clockEnabled = true; return false; }
+  if (finger.createModel() != FINGERPRINT_OK) { beepFail(); clockEnabled = true; return false; }
+  if (finger.storeModel(id) != FINGERPRINT_OK){ beepFail(); clockEnabled = true; return false; }
 
   showMsg("ENROLL OK!", "ID: " + String(id), "Registered!", true);
   beepEnroll();
@@ -359,10 +383,14 @@ void checkWifi() {
   lastWifiCheck = millis();
   if (WiFi.status() == WL_CONNECTED) return;
 
+  clockEnabled = false;
   showMsg("WiFi Lost!", "Reconnecting...", "");
   WiFi.reconnect();
   unsigned long t = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t < 10000) delay(500);
+  while (WiFi.status() != WL_CONNECTED && millis() - t < 10000) {
+    esp_task_wdt_reset();
+    delay(500);
+  }
 
   if (WiFi.status() != WL_CONNECTED) {
     showMsg("WiFi Failed!", "Restarting...", "");
@@ -373,6 +401,7 @@ void checkWifi() {
   configTime(gmtOffset, daylightOffset, ntpServer);
   showMsg("WiFi OK!", WiFi.localIP().toString(), DEVICE_ID);
   delay(1000);
+  clockEnabled = true;
 }
 
 // ===== แสกนนิ้ว =====
@@ -466,6 +495,9 @@ void setup() {
   showMsg("WiFi OK!", WiFi.localIP().toString(), "ID: " + DEVICE_ID);
   beepStart();
   delay(1500);
+
+  // สร้าง mutex ก่อนเริ่ม clock task — ป้องกัน I2C race ระหว่าง Core 0/1
+  oledMutex = xSemaphoreCreateMutex();
 
   // เริ่ม Clock Task บน Core 0
   xTaskCreatePinnedToCore(clockTaskFunc, "clock", 4096, NULL, 1, NULL, 0);
