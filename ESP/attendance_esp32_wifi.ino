@@ -287,6 +287,25 @@ void checkEnrollCmd() {
   }
 }
 
+// ===== Poll คำสั่งล้างเซนเซอร์ =====
+void checkSensorClearCmd() {
+  String resp;
+  if (!httpGet(SERVER_URL + "/api/sensor-clear-pending", resp)) return;
+  if (resp.indexOf("\"pending\":true") >= 0) {
+    showMsg("Clearing...", "Sensor memory", "Please wait");
+    uint8_t r = finger.emptyDatabase();
+    if (r == FINGERPRINT_OK) {
+      finger.getTemplateCount();
+      showMsg("SENSOR CLEARED", "Count: 0", "Re-enroll needed", true);
+      beepEnroll();
+    } else {
+      showMsg("Clear FAILED!", "Error: " + String(r), "");
+      beepFail();
+    }
+    delay(3000);
+  }
+}
+
 // ===== WiFi Reconnect =====
 void checkWifi() {
   if (millis() - lastWifiCheck < 60000) return;
@@ -402,6 +421,7 @@ void loop() {
   if (millis() - lastPoll > 3000) {
     lastPoll = millis();
     checkEnrollCmd();
+    checkSensorClearCmd();
   }
 
   if (millis() - lastClock > 1000) {

@@ -257,6 +257,13 @@ async function deleteUser(fid) {
   loadUsers();
 }
 
+// ===== Clear Sensor =====
+async function clearSensor() {
+  if (!confirm('🗑️ ล้างลายนิ้วมือทั้งหมดในเครื่องสแกน?\nต้องวาง ESP32 ให้ออนไลน์ก่อน')) return;
+  await fetch(API_BASE + '/api/sensor-clear-request', { method: 'POST' });
+  alert('✅ ส่งคำสั่งแล้ว — รอ ESP32 รับคำสั่ง (ภายใน 3 วินาที)\nจอเครื่องจะขึ้น "SENSOR CLEARED"');
+}
+
 // ===== Admin Reset =====
 async function resetAllData() {
   if (!confirm('⚠️ ลบข้อมูลทั้งหมด? (พนักงาน + บันทึกเวลา)\nไม่สามารถย้อนกลับได้!')) return;

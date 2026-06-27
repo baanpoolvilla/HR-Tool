@@ -27,6 +27,7 @@ const pool = new Pool({
 
 let enrollQueue = null;
 let enrollPickedUp = false;
+let sensorClearPending = false;
 
 async function initDB() {
   await pool.query(`
@@ -107,6 +108,22 @@ app.post('/api/enroll-request', (req, res) => {
 // WEB — ดูสถานะ enroll โดยไม่แตะ queue (safe for frontend polling)
 app.get('/api/enroll-watch', (req, res) => {
   res.json({ queued: enrollQueue !== null, picked_up: enrollPickedUp });
+});
+
+// ESP32 — poll คำสั่งล้างเซนเซอร์
+app.get('/api/sensor-clear-pending', (req, res) => {
+  if (sensorClearPending) {
+    sensorClearPending = false;
+    res.json({ pending: true });
+  } else {
+    res.json({ pending: false });
+  }
+});
+
+// WEB — สั่งล้างเซนเซอร์
+app.post('/api/sensor-clear-request', (req, res) => {
+  sensorClearPending = true;
+  res.json({ success: true });
 });
 
 // ADMIN — ล้างข้อมูลทั้งหมด
