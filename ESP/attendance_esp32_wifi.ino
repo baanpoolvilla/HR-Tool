@@ -6,6 +6,9 @@
 #include <Adafruit_GFX.h>
 #include <Preferences.h>
 #include <time.h>
+#include <esp_task_wdt.h>
+
+#define WDT_TIMEOUT 25  // auto-restart ถ้าค้างเกิน 25 วินาที
 
 // ===== OLED =====
 #define SCREEN_WIDTH 128
@@ -411,10 +414,16 @@ void setup() {
   showMsg("WiFi OK!", WiFi.localIP().toString(), "ID: " + DEVICE_ID);
   beepStart();
   delay(1500);
+
+  // เปิด Hardware Watchdog — reset อัตโนมัติถ้าค้างเกิน 25s
+  esp_task_wdt_init(WDT_TIMEOUT, true);
+  esp_task_wdt_add(NULL);
 }
 
 // ===== LOOP =====
 void loop() {
+  esp_task_wdt_reset();  // บอก watchdog ว่ายังทำงานปกติ
+
   // WiFi reconnect ทุก 60s
   checkWifi();
 
