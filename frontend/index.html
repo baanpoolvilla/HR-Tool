@@ -28,6 +28,7 @@
   <div class="tab active" onclick="showTab('logs', this)">📋 บันทึกเวลา</div>
   <div class="tab"        onclick="showTab('users', this)">👥 จัดการลายนิ้วมือ</div>
   <div class="tab"        onclick="showTab('report', this)">📊 รายงาน & เงินเดือน</div>
+  <div class="tab"        onclick="showTab('config', this)">⚙️ ตั้งค่าระบบ</div>
 </div>
 
 <!-- TAB: LOGS -->
@@ -175,6 +176,63 @@
       <tfoot id="report-foot"></tfoot>
     </table>
   </div>
+</div>
+
+<!-- TAB: CONFIG -->
+<div id="tab-config" class="content hidden">
+
+  <div class="card">
+    <h2>⚙️ ค่าเริ่มต้นสำหรับพนักงานใหม่</h2>
+    <p style="color:#888;font-size:13px;margin-bottom:12px">กรอกอัตโนมัติทุกครั้งที่เปิดหน้าเพิ่มพนักงาน</p>
+    <div id="config-status" class="status"></div>
+    <div class="form-row">
+      <div class="form-group" style="max-width:130px">
+        <label>เวลาเข้างาน</label>
+        <input type="time" id="cfg-work-start" value="08:00">
+      </div>
+      <div class="form-group" style="max-width:130px">
+        <label>OUT หลังเวลา</label>
+        <input type="time" id="cfg-checkout" value="17:00">
+      </div>
+      <div class="form-group" style="max-width:130px">
+        <label>ผ่อนผัน (นาที)</label>
+        <input type="number" id="cfg-grace" placeholder="15" min="0" max="120">
+      </div>
+      <div class="form-group" style="max-width:140px">
+        <label>ฐานเดือน (บาท)</label>
+        <input type="number" id="cfg-salary" placeholder="0" min="0" step="100">
+      </div>
+      <div class="form-group" style="max-width:140px">
+        <label>เบี้ยขยัน (บาท)</label>
+        <input type="number" id="cfg-bonus" placeholder="0" min="0" step="100">
+      </div>
+      <div class="form-group" style="max-width:90px;justify-content:flex-end">
+        <label>&nbsp;</label>
+        <button class="btn btn-success" onclick="saveSettings()">💾 บันทึก</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h2>📡 อุปกรณ์สแกนนิ้ว</h2>
+      <button class="btn btn-primary" onclick="loadDevices()">🔄 รีเฟรช</button>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Device ID</th><th>ครั้งที่สแกน</th><th>ผู้ใช้</th><th>สแกนล่าสุด</th></tr>
+      </thead>
+      <tbody id="devices-body">
+        <tr><td colspan="4" style="text-align:center;color:#999;padding:20px">กำลังโหลด...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>ℹ️ ข้อมูลระบบ</h2>
+    <div id="system-info" style="display:flex;gap:12px;flex-wrap:wrap"></div>
+  </div>
+
 </div>
 
 <!-- Modal: Commission edit -->

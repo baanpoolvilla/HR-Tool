@@ -42,8 +42,9 @@ function showTab(tab, el) {
   document.querySelectorAll('.tab').forEach(e => e.classList.remove('active'));
   document.getElementById('tab-' + tab).classList.remove('hidden');
   el.classList.add('active');
-  if (tab === 'logs') loadLogs();
-  if (tab === 'users') loadUsers();
+  if (tab === 'logs')   loadLogs();
+  if (tab === 'users')  { loadUsers(); applyDefaultsToForm(); }
+  if (tab === 'config') { loadSettings(); loadDevices(); loadSystemInfo(); }
 }
 
 function fmtTime(ts) {
@@ -309,6 +310,91 @@ async function resetAllData() {
     loadLogs();
     loadUsers();
   }
+}
+
+// ===== Config / Settings =====
+async function loadSettings() {
+  try {
+    const res = await fetch(API_BASE + '/api/settings');
+    const s   = await res.json();
+    document.getElementById('cfg-work-start').value = s.default_work_start?.value || '08:00';
+    document.getElementById('cfg-checkout').value   = s.default_checkout?.value   || '17:00';
+    document.getElementById('cfg-grace').value      = s.default_grace?.value      || '15';
+    document.getElementById('cfg-salary').value     = s.default_salary?.value     || '0';
+    document.getElementById('cfg-bonus').value      = s.default_bonus?.value      || '0';
+  } catch(e) {}
+}
+
+async function saveSettings() {
+  const updates = {
+    default_work_start: document.getElementById('cfg-work-start').value,
+    default_checkout:   document.getElementById('cfg-checkout').value,
+    default_grace:      document.getElementById('cfg-grace').value,
+    default_salary:     document.getElementById('cfg-salary').value,
+    default_bonus:      document.getElementById('cfg-bonus').value,
+  };
+  const res    = await fetch(API_BASE + '/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+  const status = document.getElementById('config-status');
+  if (res.ok) {
+    status.className = 'status success';
+    status.textContent = '✅ บันทึกค่าเริ่มต้นแล้ว';
+  } else {
+    status.className = 'status error';
+    status.textContent = '❌ เกิดข้อผิดพลาด';
+  }
+  setTimeout(() => { status.className = 'status'; }, 3000);
+}
+
+async function applyDefaultsToForm() {
+  if (document.getElementById('f-finger-id').value) return; // กำลัง edit อยู่
+  try {
+    const res = await fetch(API_BASE + '/api/settings');
+    const s   = await res.json();
+    document.getElementById('f-start-time').value    = s.default_work_start?.value || '08:00';
+    document.getElementById('f-checkout-time').value = s.default_checkout?.value   || '17:00';
+    document.getElementById('f-grace').value         = s.default_grace?.value      || '15';
+    document.getElementById('f-salary').value        = s.default_salary?.value     || '0';
+    document.getElementById('f-bonus').value         = s.default_bonus?.value      || '0';
+  } catch(e) {}
+}
+
+async function loadDevices() {
+  const res   = await fetch(API_BASE + '/api/devices');
+  const devs  = await res.json();
+  const tbody = document.getElementById('devices-body');
+  if (!devs.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#999;padding:16px">ยังไม่มีอุปกรณ์</td></tr>';
+    return;
+  }
+  tbody.innerHTML = devs.map(d => `
+    <tr>
+      <td><strong>${d.device_id}</strong></td>
+      <td style="text-align:center">${Number(d.scan_count).toLocaleString()} ครั้ง</td>
+      <td style="text-align:center">${d.unique_users} คน</td>
+      <td>${fmtTime(d.last_seen)}</td>
+    </tr>`).join('');
+}
+
+async function loadSystemInfo() {
+  try {
+    const res  = await fetch(API_BASE + '/api/system-info');
+    const info = await res.json();
+    const thTime = new Date(info.server_time).toLocaleString('th-TH');
+    document.getElementById('system-info').innerHTML = [
+      { label: '👥 พนักงาน',         value: info.total_users    + ' คน' },
+      { label: '📋 บันทึกเวลาทั้งหมด', value: info.total_logs.toLocaleString() + ' รายการ' },
+      { label: '📡 อุปกรณ์',          value: info.total_devices  + ' เครื่อง' },
+      { label: '🕐 เวลาเซิร์ฟเวอร์',  value: thTime },
+    ].map(c => `
+      <div class="stat" style="flex:1;min-width:160px">
+        <div class="stat-num" style="font-size:18px">${c.value}</div>
+        <div class="stat-label">${c.label}</div>
+      </div>`).join('');
+  } catch(e) {}
 }
 
 // ===== Report & Payroll =====

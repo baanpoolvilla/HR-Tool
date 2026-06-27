@@ -64,6 +64,23 @@ async function initDB() {
   await pool.query(`ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS check_type VARCHAR(3) DEFAULT 'IN';`);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key   VARCHAR(50) PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT '',
+      label VARCHAR(100) DEFAULT ''
+    );
+  `);
+  await pool.query(`
+    INSERT INTO system_settings (key, value, label) VALUES
+      ('default_work_start', '08:00', 'เวลาเข้างานค่าเริ่มต้น'),
+      ('default_checkout',   '17:00', 'เวลา OUT ค่าเริ่มต้น'),
+      ('default_grace',      '15',    'ผ่อนผัน (นาที)'),
+      ('default_salary',     '0',     'ฐานเดือนค่าเริ่มต้น'),
+      ('default_bonus',      '0',     'เบี้ยขยันค่าเริ่มต้น')
+    ON CONFLICT (key) DO NOTHING;
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS monthly_commissions (
       id                SERIAL PRIMARY KEY,
       finger_id         INTEGER NOT NULL,
@@ -363,6 +380,52 @@ app.post('/api/commission', async (req, res) => {
     DO UPDATE SET commission_amount=$4, notes=$5
   `, [finger_id, year, month, commission_amount || 0, notes || '']);
   res.json({ success: true });
+});
+
+// WEB — อ่าน settings
+app.get('/api/settings', async (req, res) => {
+  const result = await pool.query('SELECT key, value, label FROM system_settings ORDER BY key');
+  const out = {};
+  result.rows.forEach(r => { out[r.key] = { value: r.value, label: r.label }; });
+  res.json(out);
+});
+
+// WEB — บันทึก settings
+app.post('/api/settings', async (req, res) => {
+  const updates = req.body;
+  for (const [key, value] of Object.entries(updates)) {
+    await pool.query('UPDATE system_settings SET value=$2 WHERE key=$1', [key, String(value)]);
+  }
+  res.json({ success: true });
+});
+
+// WEB — อุปกรณ์ที่สแกนมาแล้ว
+app.get('/api/devices', async (req, res) => {
+  const result = await pool.query(`
+    SELECT device_id,
+           COUNT(*)         AS scan_count,
+           MAX(check_time)  AS last_seen,
+           COUNT(DISTINCT finger_id) AS unique_users
+    FROM attendance_logs
+    GROUP BY device_id
+    ORDER BY last_seen DESC
+  `);
+  res.json(result.rows);
+});
+
+// WEB — สรุประบบ
+app.get('/api/system-info', async (req, res) => {
+  const [users, logs, devs] = await Promise.all([
+    pool.query('SELECT COUNT(*) as count FROM fp_users'),
+    pool.query('SELECT COUNT(*) as count FROM attendance_logs'),
+    pool.query('SELECT COUNT(DISTINCT device_id) as count FROM attendance_logs'),
+  ]);
+  res.json({
+    total_users:   parseInt(users.rows[0].count),
+    total_logs:    parseInt(logs.rows[0].count),
+    total_devices: parseInt(devs.rows[0].count),
+    server_time:   new Date().toISOString(),
+  });
 });
 
 initDB().then(() => {
