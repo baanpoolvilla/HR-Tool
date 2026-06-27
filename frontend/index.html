@@ -217,9 +217,14 @@
         <input type="text" id="cfg-line-token" placeholder="จาก developers.line.biz → Messaging API → Channel access token" style="font-family:monospace">
       </div>
       <div class="form-group" style="flex:1">
-        <label>LINE User ID / Group ID</label>
-        <input type="text" id="cfg-line-user" placeholder="U... หรือ C..." style="font-family:monospace">
+        <label>LINE Group ID <span id="group-id-badge" style="font-size:11px;color:#2e7d32"></span></label>
+        <input type="text" id="cfg-line-user" placeholder="กด capture อัตโนมัติ หรือกรอก C..." style="font-family:monospace" readonly>
       </div>
+    </div>
+    <div style="background:#e8f5e9;border-radius:8px;padding:10px 14px;margin-top:4px;font-size:13px;color:#1b5e20">
+      <strong>วิธีเชื่อมกลุ่ม LINE:</strong>
+      1) ไป <a href="https://developers.line.biz" target="_blank">developers.line.biz</a> → Messaging API → Webhook URL → ใส่ <code style="background:#c8e6c9;padding:1px 4px;border-radius:3px">https://attendance.poolvillapattayaparty.com/api/line-webhook</code>
+      &nbsp;&nbsp;2) เพิ่มบอทเข้ากลุ่ม LINE &nbsp;&nbsp;3) ส่งข้อความอะไรก็ได้ในกลุ่ม → Group ID จะถูก capture อัตโนมัติ แล้วกดบันทึก
     </div>
   </div>
 

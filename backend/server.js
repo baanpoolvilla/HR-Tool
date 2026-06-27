@@ -104,7 +104,7 @@ async function initDB() {
   await pool.query(`
     INSERT INTO system_settings (key, value, label) VALUES
       ('line_channel_token', '', 'LINE Channel Access Token'),
-      ('line_user_id',       '', 'LINE User ID / Group ID')
+      ('line_group_id',      '', 'LINE Group ID')
     ON CONFLICT (key) DO NOTHING;
   `);
 
@@ -188,12 +188,12 @@ app.post('/api/attendance', async (req, res) => {
   );
 
   // LINE Messaging API
-  const [tokenRow, userRow] = await Promise.all([
+  const [tokenRow, groupRow] = await Promise.all([
     pool.query(`SELECT value FROM system_settings WHERE key='line_channel_token'`),
-    pool.query(`SELECT value FROM system_settings WHERE key='line_user_id'`),
+    pool.query(`SELECT value FROM system_settings WHERE key='line_group_id'`),
   ]);
   const lineToken = tokenRow.rows[0]?.value;
-  const lineUser  = userRow.rows[0]?.value;
+  const lineUser  = groupRow.rows[0]?.value;
   if (lineToken && lineUser) {
     const th       = toTH(new Date());
     const hhmm     = `${String(th.getUTCHours()).padStart(2,'0')}:${String(th.getUTCMinutes()).padStart(2,'0')}`;
@@ -425,6 +425,23 @@ app.post('/api/commission', async (req, res) => {
     DO UPDATE SET commission_amount=$4, notes=$5
   `, [finger_id, year, month, commission_amount || 0, notes || '']);
   res.json({ success: true });
+});
+
+// LINE Webhook — auto-capture Group ID เมื่อบอทอยู่ในกลุ่ม
+app.post('/api/line-webhook', async (req, res) => {
+  res.sendStatus(200); // ต้องตอบ 200 ทันที ไม่งั้น LINE retry
+  const events = req.body?.events || [];
+  for (const event of events) {
+    const groupId = event.source?.groupId;
+    if (groupId) {
+      await pool.query(
+        `INSERT INTO system_settings (key, value, label) VALUES ('line_group_id', $1, 'LINE Group ID')
+         ON CONFLICT (key) DO UPDATE SET value = $1`,
+        [groupId]
+      ).catch(() => {});
+      break;
+    }
+  }
 });
 
 // WEB — อ่าน settings

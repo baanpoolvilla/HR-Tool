@@ -328,8 +328,10 @@ async function loadSettings() {
     document.getElementById('cfg-grace').value       = s.default_grace?.value      || '15';
     document.getElementById('cfg-salary').value      = s.default_salary?.value     || '0';
     document.getElementById('cfg-bonus').value       = s.default_bonus?.value      || '0';
-    document.getElementById('cfg-line-token').value  = s.line_channel_token?.value || '';
-    document.getElementById('cfg-line-user').value   = s.line_user_id?.value       || '';
+    document.getElementById('cfg-line-token').value = s.line_channel_token?.value || '';
+    const gid = s.line_group_id?.value || '';
+    document.getElementById('cfg-line-user').value = gid;
+    document.getElementById('group-id-badge').textContent = gid ? '✅ Captured' : '';
   } catch(e) {}
 }
 
@@ -341,7 +343,7 @@ async function saveSettings() {
     default_salary:     document.getElementById('cfg-salary').value,
     default_bonus:      document.getElementById('cfg-bonus').value,
     line_channel_token: document.getElementById('cfg-line-token').value,
-    line_user_id:       document.getElementById('cfg-line-user').value,
+    line_group_id:      document.getElementById('cfg-line-user').value,
   };
   const res    = await fetch(API_BASE + '/api/settings', {
     method: 'POST',
