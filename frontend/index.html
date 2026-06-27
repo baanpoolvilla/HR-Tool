@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ระบบลงเวลา</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="header">
+  <span style="font-size:28px">👆</span>
+  <div>
+    <h1>ระบบลงเวลาทำงาน</h1>
+    <div style="font-size:12px;opacity:0.8">Fingerprint Attendance System</div>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="showTab('logs', this)">📋 บันทึกเวลา</div>
+  <div class="tab"        onclick="showTab('users', this)">👥 จัดการลายนิ้วมือ</div>
+</div>
+
+<!-- TAB: LOGS -->
+<div id="tab-logs" class="content">
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-num" id="stat-today">0</div>
+      <div class="stat-label">เข้างานวันนี้</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" id="stat-total">0</div>
+      <div class="stat-label">รายการทั้งหมด</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" id="stat-users">0</div>
+      <div class="stat-label">พนักงานที่ลงทะเบียน</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h2>📋 บันทึกเวลาล่าสุด</h2>
+      <button class="btn btn-primary" onclick="loadLogs()">🔄 รีเฟรช</button>
+    </div>
+    <table>
+      <thead>
+        <tr><th>#</th><th>ชื่อ</th><th>Finger ID</th><th>อุปกรณ์</th><th>เวลา</th><th>สถานะ</th></tr>
+      </thead>
+      <tbody id="logs-body">
+        <tr><td colspan="6" style="text-align:center;color:#999;padding:20px">กำลังโหลด...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- TAB: USERS -->
+<div id="tab-users" class="content hidden">
+  <div class="card">
+    <h2>➕ เพิ่ม / แก้ไข พนักงาน</h2>
+    <div id="user-status" class="status"></div>
+    <div class="form-row">
+      <div class="form-group" style="max-width:90px">
+        <label>Finger ID *</label>
+        <input type="number" id="f-finger-id" placeholder="1" min="1" max="127">
+      </div>
+      <div class="form-group">
+        <label>ชื่อ-นามสกุล *</label>
+        <input type="text" id="f-name" placeholder="สมชาย ใจดี">
+      </div>
+      <div class="form-group" style="max-width:130px">
+        <label>รหัสพนักงาน</label>
+        <input type="text" id="f-emp-id" placeholder="EMP001">
+      </div>
+      <div class="form-group" style="max-width:150px">
+        <label>แผนก</label>
+        <input type="text" id="f-dept" placeholder="แผนกบริการ">
+      </div>
+      <div class="form-group" style="max-width:90px;justify-content:flex-end">
+        <label>&nbsp;</label>
+        <button class="btn btn-success" onclick="saveUser()">💾 บันทึก</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h2>👥 รายชื่อพนักงาน</h2>
+      <button class="btn btn-primary" onclick="loadUsers()">🔄 รีเฟรช</button>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Finger ID</th><th>ลายนิ้วมือ</th><th>ชื่อ-นามสกุล</th><th>รหัสพนักงาน</th><th>แผนก</th><th>สถานะนิ้ว</th><th>จัดการ</th></tr>
+      </thead>
+      <tbody id="users-body">
+        <tr><td colspan="7" style="text-align:center;color:#999;padding:20px">กำลังโหลด...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Modal: Enroll -->
+<div class="modal-bg" id="enroll-modal">
+  <div class="modal">
+    <div class="modal-fp pulse" id="modal-fp-display">
+      <canvas id="fp-canvas" width="120" height="144"></canvas>
+      <span id="fp-icon" style="font-size:64px;position:relative">👆</span>
+    </div>
+    <span class="enroll-step" id="enroll-step">ขั้นตอนที่ 1/2</span>
+    <h3 id="modal-title">ลงทะเบียนลายนิ้วมือ</h3>
+    <p id="modal-desc">วางนิ้วบน Sensor แล้วกด OK บนเครื่อง ESP32</p>
+    <div class="modal-status" id="modal-status">⏳ รอการแสกนนิ้ว...</div>
+    <button class="btn btn-danger" onclick="cancelEnroll()">ยกเลิก</button>
+  </div>
+</div>
+
+<!-- Modal: View Fingerprint -->
+<div class="modal-bg" id="view-modal">
+  <div class="modal">
+    <div class="modal-fp" id="view-fp-display">
+      <canvas id="view-canvas" width="120" height="144"></canvas>
+    </div>
+    <h3 id="view-name">ลายนิ้วมือ</h3>
+    <p id="view-info" style="margin-bottom:16px"></p>
+    <button class="btn btn-primary" onclick="document.getElementById('view-modal').classList.remove('show')">ปิด</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
