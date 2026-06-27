@@ -127,14 +127,17 @@ void showMsg(String l1, String l2 = "", String l3 = "", bool inv = false) {
   display.display();
 }
 
-void showCheckin(String name, int id, String checkType) {
+void showCheckin(String name, int id, String checkType, bool isLate = false) {
   if (!oledOK) return;
   display.clearDisplay();
   display.fillRect(0, 0, 128, 14, SSD1306_WHITE);
   display.setTextColor(SSD1306_BLACK);
   display.setTextSize(1);
-  display.setCursor(checkType == "OUT" ? 16 : 22, 3);
-  display.print(checkType == "OUT" ? "CHECK-OUT OK!" : "CHECK-IN OK!");
+  String hdr = (checkType == "OUT") ? "CHECK-OUT OK!" :
+               (isLate             ? "LATE CHECK-IN!" : "CHECK-IN OK!");
+  int xpos = max(0, (128 - (int)hdr.length() * 6) / 2);
+  display.setCursor(xpos, 3);
+  display.print(hdr);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 18);
   display.print("Name: ");
@@ -224,19 +227,45 @@ void sendAttendance(int fingerId) {
   }
   String resp;
   String body = "{\"device_id\":\"" + DEVICE_ID + "\",\"finger_id\":" + String(fingerId) + "}";
-  // HTTP runs while clockEnabled=true → clock updates on Core 0
-  httpPost(SERVER_URL + "/api/attendance", body, resp);
+  // HTTP รันขณะ clockEnabled=true → นาฬิกาอัปเดตบน Core 0 ไปพร้อมกัน
+  bool ok = httpPost(SERVER_URL + "/api/attendance", body, resp);
+  if (!ok) {
+    clockEnabled = false;
+    showMsg("Server Error!", "Try again", "");
+    return;
+  }
 
+  // Parse ชื่อ (ใช้ร่วมกันทุก case)
   String name = "Unknown";
   int ni = resp.indexOf("\"name\":\"");
   if (ni >= 0) { int s = ni+8; name = resp.substring(s, resp.indexOf("\"",s)); }
 
+  // สแกนซ้ำ — มาแล้ว (IN zone)
+  if (resp.indexOf("\"already_in\"") >= 0) {
+    String hhmm = "";
+    int hi = resp.indexOf("\"check_time_hhmm\":\"");
+    if (hi >= 0) { int s = hi+19; hhmm = resp.substring(s, resp.indexOf("\"",s)); }
+    clockEnabled = false;
+    showMsg(name.substring(0,16), "IN: " + hhmm, "Already checked in");
+    return;
+  }
+
+  // สแกนซ้ำ — OUT แล้ว
+  if (resp.indexOf("\"already_out\"") >= 0) {
+    clockEnabled = false;
+    showMsg(name.substring(0,16), "Already complete", "IN & OUT recorded");
+    return;
+  }
+
+  // สำเร็จ — parse check_type และ is_late
   String checkType = "IN";
   int ci = resp.indexOf("\"check_type\":\"");
   if (ci >= 0) { int s = ci+14; checkType = resp.substring(s, resp.indexOf("\"",s)); }
 
+  bool isLate = resp.indexOf("\"is_late\":true") >= 0;
+
   clockEnabled = false;
-  showCheckin(name, fingerId, checkType);
+  showCheckin(name, fingerId, checkType, isLate);
 }
 
 // ===== แจ้ง Enroll สำเร็จ =====

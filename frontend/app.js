@@ -130,7 +130,7 @@ async function loadUsers() {
         <td>${badge}</td>
         <td style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-enroll" onclick="startEnroll(${u.finger_id},'${u.name}')">👆 ลงทะเบียนนิ้ว</button>
-          <button class="btn btn-primary" onclick="editUser(${u.finger_id},'${u.name}','${u.employee_id||''}','${u.department||''}',${u.base_salary||0},${u.attendance_bonus||0},'${u.work_start_time||'08:00'}',${u.late_grace_minutes||15})">✏️</button>
+          <button class="btn btn-primary" onclick="editUser(${u.finger_id},'${u.name}','${u.employee_id||''}','${u.department||''}',${u.base_salary||0},${u.attendance_bonus||0},'${u.work_start_time||'08:00'}',${u.late_grace_minutes||15},'${u.checkout_start_time||'17:00'}')">✏️</button>
           <button class="btn btn-danger"  onclick="deleteUser(${u.finger_id})">🗑️</button>
         </td>
       </tr>`;
@@ -229,29 +229,31 @@ function cancelEnroll() {
 }
 
 // ===== Save / Edit / Delete =====
-function editUser(fid, name, empId, dept, salary, bonus, startTime, grace) {
-  document.getElementById('f-finger-id').value   = fid;
-  document.getElementById('f-name').value         = name;
-  document.getElementById('f-emp-id').value       = empId;
-  document.getElementById('f-dept').value         = dept;
-  document.getElementById('f-salary').value       = salary || 0;
-  document.getElementById('f-bonus').value        = bonus  || 0;
-  document.getElementById('f-start-time').value   = startTime || '08:00';
-  document.getElementById('f-grace').value        = grace  || 15;
+function editUser(fid, name, empId, dept, salary, bonus, startTime, grace, checkoutTime) {
+  document.getElementById('f-finger-id').value     = fid;
+  document.getElementById('f-name').value           = name;
+  document.getElementById('f-emp-id').value         = empId;
+  document.getElementById('f-dept').value           = dept;
+  document.getElementById('f-salary').value         = salary       || 0;
+  document.getElementById('f-bonus').value          = bonus        || 0;
+  document.getElementById('f-start-time').value     = startTime    || '08:00';
+  document.getElementById('f-grace').value          = grace        || 15;
+  document.getElementById('f-checkout-time').value  = checkoutTime || '17:00';
   document.querySelector('#tab-users').scrollTo(0, 0);
   window.scrollTo(0, 0);
 }
 
 async function saveUser() {
-  const finger_id         = document.getElementById('f-finger-id').value;
-  const name              = document.getElementById('f-name').value;
-  const employee_id       = document.getElementById('f-emp-id').value;
-  const department        = document.getElementById('f-dept').value;
-  const base_salary       = parseFloat(document.getElementById('f-salary').value) || 0;
-  const attendance_bonus  = parseFloat(document.getElementById('f-bonus').value)  || 0;
-  const work_start_time   = document.getElementById('f-start-time').value || '08:00';
-  const late_grace_minutes = parseInt(document.getElementById('f-grace').value) || 15;
-  const status            = document.getElementById('user-status');
+  const finger_id           = document.getElementById('f-finger-id').value;
+  const name                = document.getElementById('f-name').value;
+  const employee_id         = document.getElementById('f-emp-id').value;
+  const department          = document.getElementById('f-dept').value;
+  const base_salary         = parseFloat(document.getElementById('f-salary').value) || 0;
+  const attendance_bonus    = parseFloat(document.getElementById('f-bonus').value)  || 0;
+  const work_start_time     = document.getElementById('f-start-time').value    || '08:00';
+  const late_grace_minutes  = parseInt(document.getElementById('f-grace').value)    || 15;
+  const checkout_start_time = document.getElementById('f-checkout-time').value || '17:00';
+  const status              = document.getElementById('user-status');
 
   if (!finger_id || !name) {
     status.className = 'status error';
@@ -263,7 +265,8 @@ async function saveUser() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ finger_id: parseInt(finger_id), name, employee_id, department,
-                           base_salary, attendance_bonus, work_start_time, late_grace_minutes }),
+                           base_salary, attendance_bonus, work_start_time, late_grace_minutes,
+                           checkout_start_time }),
   });
 
   if (res.ok) {
@@ -272,7 +275,8 @@ async function saveUser() {
     ['f-finger-id','f-name','f-emp-id','f-dept','f-salary','f-bonus','f-grace'].forEach(id => {
       document.getElementById(id).value = '';
     });
-    document.getElementById('f-start-time').value = '08:00';
+    document.getElementById('f-start-time').value    = '08:00';
+    document.getElementById('f-checkout-time').value = '17:00';
     loadUsers();
   }
   setTimeout(() => { status.className = 'status'; }, 3000);

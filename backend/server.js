@@ -50,6 +50,7 @@ async function initDB() {
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS attendance_bonus DECIMAL(10,2) DEFAULT 0;`);
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS work_start_time VARCHAR(8) DEFAULT '08:00';`);
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS late_grace_minutes INTEGER DEFAULT 15;`);
+  await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS checkout_start_time VARCHAR(8) DEFAULT '17:00';`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS attendance_logs (
@@ -78,26 +79,69 @@ async function initDB() {
   console.log('✅ DB ready');
 }
 
-// ESP32 — บันทึกเวลา (toggle IN/OUT per day)
+// ESP32 — บันทึกเวลา (time-based IN/OUT)
 app.post('/api/attendance', async (req, res) => {
   const { device_id, finger_id } = req.body;
 
-  const lastLog = await pool.query(
-    `SELECT check_type FROM attendance_logs
-     WHERE finger_id = $1 AND check_time::date = CURRENT_DATE
-     ORDER BY check_time DESC LIMIT 1`,
-    [finger_id]
-  );
-  const check_type = (lastLog.rows.length > 0 && lastLog.rows[0].check_type === 'IN') ? 'OUT' : 'IN';
+  const user    = await pool.query('SELECT * FROM fp_users WHERE finger_id = $1', [finger_id]);
+  const userRow = user.rows[0];
+  const name    = userRow ? userRow.name : 'Unknown';
 
-  const user = await pool.query('SELECT * FROM fp_users WHERE finger_id = $1', [finger_id]);
-  const name = user.rows.length > 0 ? user.rows[0].name : 'Unknown';
+  // เวลาปัจจุบัน Bangkok (UTC+7)
+  const bangkokNow = toTH(new Date());
+  const nowMin     = bangkokNow.getUTCHours() * 60 + bangkokNow.getUTCMinutes();
+  const todayDate  = bangkokNow.toISOString().split('T')[0];
+
+  // เวลาเข้างาน + ผ่อนผัน
+  const [wsh, wsm]   = (userRow?.work_start_time   || '08:00').split(':').map(Number);
+  const [coh, com]   = (userRow?.checkout_start_time || '17:00').split(':').map(Number);
+  const workStartMin  = wsh * 60 + (wsm || 0);
+  const grace         = parseInt(userRow?.late_grace_minutes || 15);
+  const lateAfterMin  = workStartMin + grace;
+  const checkoutMin   = coh * 60 + (com || 0);
+
+  // ดู logs วันนี้ (Bangkok date)
+  const logsRes = await pool.query(
+    `SELECT check_type, check_time FROM attendance_logs
+     WHERE finger_id = $1
+       AND (check_time + INTERVAL '7 hours')::date = $2::date
+     ORDER BY check_time ASC`,
+    [finger_id, todayDate]
+  );
+  const todayIN  = logsRes.rows.find(r => r.check_type === 'IN');
+  const todayOUT = logsRes.rows.find(r => r.check_type === 'OUT');
+
+  let check_type, is_late = false;
+
+  if (nowMin < checkoutMin) {
+    // === IN zone (ก่อนเวลา OUT) ===
+    if (todayIN) {
+      const th   = toTH(todayIN.check_time);
+      const hhmm = `${String(th.getUTCHours()).padStart(2,'0')}:${String(th.getUTCMinutes()).padStart(2,'0')}`;
+      return res.json({ success: false, status: 'already_in', name, check_time_hhmm: hhmm });
+    }
+    check_type = 'IN';
+    is_late    = nowMin > lateAfterMin;
+
+  } else {
+    // === OUT zone (หลังเวลา OUT) ===
+    if (todayOUT) {
+      return res.json({ success: false, status: 'already_out', name });
+    }
+    if (todayIN) {
+      check_type = 'OUT';
+    } else {
+      // ไม่มี IN เลย (มาสายมาก หรือข้ามเที่ยงคืน) → อนุญาต IN
+      check_type = 'IN';
+      is_late    = true;
+    }
+  }
 
   await pool.query(
-    'INSERT INTO attendance_logs (device_id, finger_id, name, check_type) VALUES ($1, $2, $3, $4)',
+    'INSERT INTO attendance_logs (device_id, finger_id, name, check_type) VALUES ($1,$2,$3,$4)',
     [device_id, finger_id, name, check_type]
   );
-  res.json({ success: true, name, finger_id, check_type });
+  res.json({ success: true, status: 'ok', name, finger_id, check_type, is_late });
 });
 
 // ESP32 — Next ID
@@ -174,17 +218,20 @@ app.get('/api/users', async (req, res) => {
 // WEB — upsert user (with payroll settings)
 app.post('/api/users', async (req, res) => {
   const { finger_id, name, employee_id, department,
-          base_salary, attendance_bonus, work_start_time, late_grace_minutes } = req.body;
+          base_salary, attendance_bonus, work_start_time, late_grace_minutes, checkout_start_time } = req.body;
   await pool.query(`
     INSERT INTO fp_users
-      (finger_id, name, employee_id, department, base_salary, attendance_bonus, work_start_time, late_grace_minutes)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      (finger_id, name, employee_id, department, base_salary, attendance_bonus,
+       work_start_time, late_grace_minutes, checkout_start_time)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
     ON CONFLICT (finger_id) DO UPDATE SET
       name=$2, employee_id=$3, department=$4,
-      base_salary=$5, attendance_bonus=$6, work_start_time=$7, late_grace_minutes=$8
+      base_salary=$5, attendance_bonus=$6,
+      work_start_time=$7, late_grace_minutes=$8, checkout_start_time=$9
   `, [finger_id, name, employee_id, department,
       base_salary || 0, attendance_bonus || 0,
-      work_start_time || '08:00', late_grace_minutes || 15]);
+      work_start_time || '08:00', late_grace_minutes || 15,
+      checkout_start_time || '17:00']);
   res.json({ success: true });
 });
 
