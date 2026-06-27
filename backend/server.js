@@ -4,7 +4,6 @@ const app = express();
 
 app.use(express.json());
 
-// CORS — allow Vercel deployments and local dev
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   const allowed = [/\.vercel\.app$/, /localhost/, /poolvillapattayaparty\.com$/];
@@ -29,6 +28,9 @@ let enrollQueue = null;
 let enrollPickedUp = false;
 let sensorClearPending = false;
 
+// Bangkok UTC+7 offset helper
+function toTH(d) { return new Date(new Date(d).getTime() + 7 * 3600 * 1000); }
+
 async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fp_users (
@@ -44,37 +46,67 @@ async function initDB() {
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS enrolled BOOLEAN DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS fp_pattern TEXT;`);
   await pool.query(`UPDATE fp_users SET enrolled = TRUE WHERE confidence > 0;`);
+  await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS base_salary DECIMAL(10,2) DEFAULT 0;`);
+  await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS attendance_bonus DECIMAL(10,2) DEFAULT 0;`);
+  await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS work_start_time VARCHAR(8) DEFAULT '08:00';`);
+  await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS late_grace_minutes INTEGER DEFAULT 15;`);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS attendance_logs (
-      id          SERIAL PRIMARY KEY,
-      device_id   VARCHAR(50),
-      finger_id   INTEGER,
-      name        VARCHAR(100),
-      check_time  TIMESTAMP DEFAULT NOW()
+      id         SERIAL PRIMARY KEY,
+      device_id  VARCHAR(50),
+      finger_id  INTEGER,
+      name       VARCHAR(100),
+      check_time TIMESTAMP DEFAULT NOW()
     );
   `);
+  await pool.query(`ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS check_type VARCHAR(3) DEFAULT 'IN';`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS monthly_commissions (
+      id                SERIAL PRIMARY KEY,
+      finger_id         INTEGER NOT NULL,
+      year              INTEGER NOT NULL,
+      month             INTEGER NOT NULL,
+      commission_amount DECIMAL(10,2) DEFAULT 0,
+      notes             TEXT DEFAULT '',
+      created_at        TIMESTAMP DEFAULT NOW(),
+      UNIQUE(finger_id, year, month)
+    );
+  `);
+
   console.log('✅ DB ready');
 }
 
-// ESP32 — บันทึกเวลา
+// ESP32 — บันทึกเวลา (toggle IN/OUT per day)
 app.post('/api/attendance', async (req, res) => {
   const { device_id, finger_id } = req.body;
+
+  const lastLog = await pool.query(
+    `SELECT check_type FROM attendance_logs
+     WHERE finger_id = $1 AND check_time::date = CURRENT_DATE
+     ORDER BY check_time DESC LIMIT 1`,
+    [finger_id]
+  );
+  const check_type = (lastLog.rows.length > 0 && lastLog.rows[0].check_type === 'IN') ? 'OUT' : 'IN';
+
   const user = await pool.query('SELECT * FROM fp_users WHERE finger_id = $1', [finger_id]);
   const name = user.rows.length > 0 ? user.rows[0].name : 'Unknown';
+
   await pool.query(
-    'INSERT INTO attendance_logs (device_id, finger_id, name) VALUES ($1, $2, $3)',
-    [device_id, finger_id, name]
+    'INSERT INTO attendance_logs (device_id, finger_id, name, check_type) VALUES ($1, $2, $3, $4)',
+    [device_id, finger_id, name, check_type]
   );
-  res.json({ success: true, name, finger_id });
+  res.json({ success: true, name, finger_id, check_type });
 });
 
-// ESP32 — ดึง Next ID
+// ESP32 — Next ID
 app.get('/api/next-finger-id', async (req, res) => {
   const result = await pool.query('SELECT COALESCE(MAX(finger_id), 0) + 1 as next_id FROM fp_users');
   res.json({ next_id: result.rows[0].next_id });
 });
 
-// ESP32 — poll คำสั่ง enroll (clears queue — ESP32 only)
+// ESP32 — poll enroll (clears queue)
 app.get('/api/enroll-pending', (req, res) => {
   if (enrollQueue !== null) {
     const id = enrollQueue;
@@ -86,7 +118,7 @@ app.get('/api/enroll-pending', (req, res) => {
   }
 });
 
-// ESP32 — บันทึก enroll สำเร็จ
+// ESP32 — enroll complete
 app.post('/api/enroll-complete', async (req, res) => {
   const { finger_id, confidence, fp_pattern } = req.body;
   await pool.query(
@@ -97,7 +129,7 @@ app.post('/api/enroll-complete', async (req, res) => {
   res.json({ success: true });
 });
 
-// WEB — สั่ง enroll จากเว็บ
+// WEB — request enroll
 app.post('/api/enroll-request', (req, res) => {
   const { finger_id } = req.body;
   enrollQueue = finger_id;
@@ -105,12 +137,12 @@ app.post('/api/enroll-request', (req, res) => {
   res.json({ success: true, finger_id });
 });
 
-// WEB — ดูสถานะ enroll โดยไม่แตะ queue (safe for frontend polling)
+// WEB — watch enroll (safe, no queue change)
 app.get('/api/enroll-watch', (req, res) => {
   res.json({ queued: enrollQueue !== null, picked_up: enrollPickedUp });
 });
 
-// ESP32 — poll คำสั่งล้างเซนเซอร์
+// ESP32 — poll sensor clear
 app.get('/api/sensor-clear-pending', (req, res) => {
   if (sensorClearPending) {
     sensorClearPending = false;
@@ -120,52 +152,58 @@ app.get('/api/sensor-clear-pending', (req, res) => {
   }
 });
 
-// WEB — สั่งล้างเซนเซอร์
+// WEB — request sensor clear
 app.post('/api/sensor-clear-request', (req, res) => {
   sensorClearPending = true;
   res.json({ success: true });
 });
 
-// ADMIN — ล้างข้อมูลทั้งหมด
+// ADMIN — reset all data
 app.delete('/api/admin/reset', async (req, res) => {
   if (req.body.key !== 'reset-confirm') return res.status(403).json({ error: 'Forbidden' });
-  await pool.query('TRUNCATE attendance_logs, fp_users RESTART IDENTITY');
+  await pool.query('TRUNCATE attendance_logs, fp_users, monthly_commissions RESTART IDENTITY');
   res.json({ success: true });
 });
 
-// WEB — รายชื่อพนักงาน
+// WEB — list users
 app.get('/api/users', async (req, res) => {
   const result = await pool.query('SELECT * FROM fp_users ORDER BY finger_id');
   res.json(result.rows);
 });
 
-// WEB — เพิ่ม/แก้ไข พนักงาน
+// WEB — upsert user (with payroll settings)
 app.post('/api/users', async (req, res) => {
-  const { finger_id, name, employee_id, department } = req.body;
+  const { finger_id, name, employee_id, department,
+          base_salary, attendance_bonus, work_start_time, late_grace_minutes } = req.body;
   await pool.query(`
-    INSERT INTO fp_users (finger_id, name, employee_id, department)
-    VALUES ($1, $2, $3, $4)
-    ON CONFLICT (finger_id) DO UPDATE SET name=$2, employee_id=$3, department=$4
-  `, [finger_id, name, employee_id, department]);
+    INSERT INTO fp_users
+      (finger_id, name, employee_id, department, base_salary, attendance_bonus, work_start_time, late_grace_minutes)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    ON CONFLICT (finger_id) DO UPDATE SET
+      name=$2, employee_id=$3, department=$4,
+      base_salary=$5, attendance_bonus=$6, work_start_time=$7, late_grace_minutes=$8
+  `, [finger_id, name, employee_id, department,
+      base_salary || 0, attendance_bonus || 0,
+      work_start_time || '08:00', late_grace_minutes || 15]);
   res.json({ success: true });
 });
 
-// WEB — ลบพนักงาน
+// WEB — delete user
 app.delete('/api/users/:finger_id', async (req, res) => {
   await pool.query('DELETE FROM fp_users WHERE finger_id = $1', [req.params.finger_id]);
   res.json({ success: true });
 });
 
-// WEB — Logs
+// WEB — logs (include check_type)
 app.get('/api/logs', async (req, res) => {
   const result = await pool.query(`
-    SELECT id, device_id, finger_id, name, check_time
+    SELECT id, device_id, finger_id, name, check_time, check_type
     FROM attendance_logs ORDER BY check_time DESC LIMIT 100
   `);
   res.json(result.rows);
 });
 
-// WEB — Stats
+// WEB — stats
 app.get('/api/stats', async (req, res) => {
   const today = await pool.query(`
     SELECT COUNT(DISTINCT finger_id) as count FROM attendance_logs
@@ -174,10 +212,110 @@ app.get('/api/stats', async (req, res) => {
   const total = await pool.query('SELECT COUNT(*) as count FROM attendance_logs');
   const users = await pool.query('SELECT COUNT(*) as count FROM fp_users');
   res.json({
-    today: parseInt(today.rows[0].count),
-    total: parseInt(total.rows[0].count),
+    today:      parseInt(today.rows[0].count),
+    total:      parseInt(total.rows[0].count),
     registered: parseInt(users.rows[0].count)
   });
+});
+
+// WEB — monthly payroll report
+app.get('/api/report', async (req, res) => {
+  const year  = parseInt(req.query.year)  || new Date().getFullYear();
+  const month = parseInt(req.query.month) || (new Date().getMonth() + 1);
+
+  const [usersRes, logsRes, commRes] = await Promise.all([
+    pool.query('SELECT * FROM fp_users ORDER BY finger_id'),
+    pool.query(
+      `SELECT finger_id, check_type, check_time FROM attendance_logs
+       WHERE EXTRACT(YEAR FROM check_time) = $1 AND EXTRACT(MONTH FROM check_time) = $2
+       ORDER BY check_time ASC`,
+      [year, month]
+    ),
+    pool.query(
+      `SELECT finger_id, commission_amount, notes FROM monthly_commissions
+       WHERE year = $1 AND month = $2`,
+      [year, month]
+    )
+  ]);
+
+  const commMap = {};
+  commRes.rows.forEach(c => { commMap[c.finger_id] = c; });
+
+  // group by finger_id → Bangkok date string
+  const logsByUser = {};
+  logsRes.rows.forEach(log => {
+    const fid = log.finger_id;
+    if (!logsByUser[fid]) logsByUser[fid] = {};
+    const th   = toTH(log.check_time);
+    const date = th.toISOString().split('T')[0];
+    if (!logsByUser[fid][date]) logsByUser[fid][date] = [];
+    logsByUser[fid][date].push({ type: log.check_type, time: th });
+  });
+
+  const report = usersRes.rows.map(u => {
+    const userLogs = logsByUser[u.finger_id] || {};
+    const [sh, sm] = (u.work_start_time || '08:00').split(':').map(Number);
+    const startMin = sh * 60 + (sm || 0);
+    const grace    = parseInt(u.late_grace_minutes) || 15;
+
+    let days_present = 0, days_late = 0;
+    const daily_records = [];
+
+    Object.entries(userLogs).sort().forEach(([date, dayLogs]) => {
+      const inLogs  = dayLogs.filter(l => l.type === 'IN');
+      const outLogs = dayLogs.filter(l => l.type === 'OUT');
+      if (inLogs.length === 0) return;
+      days_present++;
+
+      const firstIn = inLogs[0].time;
+      const inMin   = firstIn.getUTCHours() * 60 + firstIn.getUTCMinutes();
+      const isLate  = inMin > startMin + grace;
+      if (isLate) days_late++;
+
+      const lastOut    = outLogs.length > 0 ? outLogs[outLogs.length - 1].time : null;
+      const work_hours = lastOut ? +((lastOut - firstIn) / 3600000).toFixed(1) : null;
+
+      daily_records.push({
+        date,
+        first_in:     firstIn.toISOString(),
+        last_out:     lastOut ? lastOut.toISOString() : null,
+        is_late:      isLate,
+        late_minutes: isLate ? inMin - startMin - grace : 0,
+        work_hours
+      });
+    });
+
+    const commission   = parseFloat(commMap[u.finger_id]?.commission_amount || 0);
+    const bonus_earned = (days_late === 0 && days_present > 0)
+      ? parseFloat(u.attendance_bonus || 0) : 0;
+    const total_pay = parseFloat(u.base_salary || 0) + bonus_earned + commission;
+
+    return {
+      finger_id: u.finger_id, name: u.name,
+      employee_id: u.employee_id, department: u.department,
+      base_salary:       parseFloat(u.base_salary || 0),
+      attendance_bonus:  parseFloat(u.attendance_bonus || 0),
+      work_start_time:   u.work_start_time || '08:00',
+      late_grace_minutes: grace,
+      days_present, days_late, commission,
+      commission_notes: commMap[u.finger_id]?.notes || '',
+      bonus_earned, total_pay, daily_records
+    };
+  });
+
+  res.json({ year, month, report });
+});
+
+// WEB — upsert monthly commission
+app.post('/api/commission', async (req, res) => {
+  const { finger_id, year, month, commission_amount, notes } = req.body;
+  await pool.query(`
+    INSERT INTO monthly_commissions (finger_id, year, month, commission_amount, notes)
+    VALUES ($1,$2,$3,$4,$5)
+    ON CONFLICT (finger_id, year, month)
+    DO UPDATE SET commission_amount=$4, notes=$5
+  `, [finger_id, year, month, commission_amount || 0, notes || '']);
+  res.json({ success: true });
 });
 
 initDB().then(() => {

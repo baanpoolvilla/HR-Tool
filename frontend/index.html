@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ระบบลงเวลา</title>
   <link rel="stylesheet" href="style.css">
+  <style>
+    @media print {
+      .header, .tabs, #tab-logs, #tab-users, #tab-report .card:first-child,
+      #report-summary, .btn { display: none !important; }
+      #tab-report { display: block !important; }
+      body { background: white; }
+    }
+  </style>
 </head>
 <body>
 
@@ -19,6 +27,7 @@
 <div class="tabs">
   <div class="tab active" onclick="showTab('logs', this)">📋 บันทึกเวลา</div>
   <div class="tab"        onclick="showTab('users', this)">👥 จัดการลายนิ้วมือ</div>
+  <div class="tab"        onclick="showTab('report', this)">📊 รายงาน & เงินเดือน</div>
 </div>
 
 <!-- TAB: LOGS -->
@@ -45,7 +54,7 @@
     </div>
     <table>
       <thead>
-        <tr><th>#</th><th>ชื่อ</th><th>Finger ID</th><th>อุปกรณ์</th><th>เวลา</th><th>สถานะ</th></tr>
+        <tr><th>#</th><th>ชื่อ</th><th>Finger ID</th><th>อุปกรณ์</th><th>เวลา</th><th>ประเภท</th></tr>
       </thead>
       <tbody id="logs-body">
         <tr><td colspan="6" style="text-align:center;color:#999;padding:20px">กำลังโหลด...</td></tr>
@@ -76,6 +85,24 @@
         <label>แผนก</label>
         <input type="text" id="f-dept" placeholder="แผนกบริการ">
       </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group" style="max-width:140px">
+        <label>ฐานเดือน (บาท)</label>
+        <input type="number" id="f-salary" placeholder="0" min="0" step="100">
+      </div>
+      <div class="form-group" style="max-width:140px">
+        <label>เบี้ยขยัน (บาท)</label>
+        <input type="number" id="f-bonus" placeholder="0" min="0" step="100">
+      </div>
+      <div class="form-group" style="max-width:130px">
+        <label>เวลาเข้างาน</label>
+        <input type="time" id="f-start-time" value="08:00">
+      </div>
+      <div class="form-group" style="max-width:130px">
+        <label>ผ่อนผัน (นาที)</label>
+        <input type="number" id="f-grace" placeholder="15" min="0" max="120">
+      </div>
       <div class="form-group" style="max-width:90px;justify-content:flex-end">
         <label>&nbsp;</label>
         <button class="btn btn-success" onclick="saveUser()">💾 บันทึก</button>
@@ -100,6 +127,87 @@
         <tr><td colspan="7" style="text-align:center;color:#999;padding:20px">กำลังโหลด...</td></tr>
       </tbody>
     </table>
+  </div>
+</div>
+
+<!-- TAB: REPORT -->
+<div id="tab-report" class="content hidden">
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <h2>📊 รายงานเงินเดือน</h2>
+      <select id="r-month" style="padding:6px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px">
+        <option value="1">มกราคม</option><option value="2">กุมภาพันธ์</option>
+        <option value="3">มีนาคม</option><option value="4">เมษายน</option>
+        <option value="5">พฤษภาคม</option><option value="6">มิถุนายน</option>
+        <option value="7">กรกฎาคม</option><option value="8">สิงหาคม</option>
+        <option value="9">กันยายน</option><option value="10">ตุลาคม</option>
+        <option value="11">พฤศจิกายน</option><option value="12">ธันวาคม</option>
+      </select>
+      <input type="number" id="r-year" style="width:80px;padding:6px 10px;border:1px solid #ddd;border-radius:8px;font-size:14px">
+      <button class="btn btn-primary" onclick="loadReport()">🔍 ดูรายงาน</button>
+      <button class="btn btn-warning" onclick="window.print()">🖨️ พิมพ์</button>
+    </div>
+  </div>
+
+  <div id="report-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:4px"></div>
+
+  <div class="card" style="overflow-x:auto">
+    <table>
+      <thead>
+        <tr>
+          <th>ชื่อ-สกุล / แผนก</th>
+          <th>วันที่มา</th>
+          <th>เข้าสาย</th>
+          <th>ฐานเดือน</th>
+          <th>เบี้ยขยัน</th>
+          <th>ค่าคอม</th>
+          <th>รวมทั้งหมด</th>
+          <th>จัดการ</th>
+        </tr>
+      </thead>
+      <tbody id="report-body">
+        <tr><td colspan="8" style="text-align:center;color:#999;padding:20px">เลือกเดือนและปี แล้วกด "ดูรายงาน"</td></tr>
+      </tbody>
+      <tfoot id="report-foot"></tfoot>
+    </table>
+  </div>
+</div>
+
+<!-- Modal: Commission edit -->
+<div class="modal-bg" id="comm-modal">
+  <div class="modal" style="max-width:360px">
+    <h3 id="comm-modal-title">แก้ไขค่าคอม</h3>
+    <div class="form-group" style="margin-top:16px">
+      <label>จำนวน (บาท)</label>
+      <input type="number" id="comm-amount" min="0" step="0.01" style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;margin-top:4px">
+    </div>
+    <div class="form-group" style="margin-top:12px">
+      <label>หมายเหตุ</label>
+      <input type="text" id="comm-notes" placeholder="เช่น ค่า service charge" style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;margin-top:4px">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:20px">
+      <button class="btn btn-success" onclick="saveCommission()">💾 บันทึก</button>
+      <button class="btn btn-danger"  onclick="document.getElementById('comm-modal').classList.remove('show')">ยกเลิก</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Daily detail -->
+<div class="modal-bg" id="detail-modal">
+  <div class="modal" style="max-width:660px;width:94%">
+    <h3 id="detail-title">รายละเอียดรายวัน</h3>
+    <p id="detail-meta" style="color:#666;font-size:13px;margin:4px 0 16px"></p>
+    <div style="overflow-x:auto">
+      <table>
+        <thead>
+          <tr><th>วันที่</th><th>เข้างาน</th><th>ออกงาน</th><th>ชั่วโมง</th><th>สถานะ</th></tr>
+        </thead>
+        <tbody id="detail-body"></tbody>
+      </table>
+    </div>
+    <div style="margin-top:16px;text-align:right">
+      <button class="btn btn-primary" onclick="document.getElementById('detail-modal').classList.remove('show')">ปิด</button>
+    </div>
   </div>
 </div>
 

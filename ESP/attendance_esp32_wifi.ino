@@ -127,14 +127,14 @@ void showMsg(String l1, String l2 = "", String l3 = "", bool inv = false) {
   display.display();
 }
 
-void showCheckin(String name, int id) {
+void showCheckin(String name, int id, String checkType) {
   if (!oledOK) return;
   display.clearDisplay();
   display.fillRect(0, 0, 128, 14, SSD1306_WHITE);
   display.setTextColor(SSD1306_BLACK);
   display.setTextSize(1);
-  display.setCursor(22, 3);
-  display.print("CHECK-IN OK!");
+  display.setCursor(checkType == "OUT" ? 16 : 22, 3);
+  display.print(checkType == "OUT" ? "CHECK-OUT OK!" : "CHECK-IN OK!");
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 18);
   display.print("Name: ");
@@ -230,8 +230,13 @@ void sendAttendance(int fingerId) {
   String name = "Unknown";
   int ni = resp.indexOf("\"name\":\"");
   if (ni >= 0) { int s = ni+8; name = resp.substring(s, resp.indexOf("\"",s)); }
+
+  String checkType = "IN";
+  int ci = resp.indexOf("\"check_type\":\"");
+  if (ci >= 0) { int s = ci+14; checkType = resp.substring(s, resp.indexOf("\"",s)); }
+
   clockEnabled = false;
-  showCheckin(name, fingerId);
+  showCheckin(name, fingerId, checkType);
 }
 
 // ===== แจ้ง Enroll สำเร็จ =====

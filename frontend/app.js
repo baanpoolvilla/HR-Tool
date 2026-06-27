@@ -50,6 +50,16 @@ function fmtTime(ts) {
   return new Date(ts).toLocaleString('th-TH');
 }
 
+function fmtHHMM(ts) {
+  if (!ts) return '-';
+  const d = new Date(ts);
+  return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+}
+
+function fmtMoney(n) {
+  return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2 });
+}
+
 // ===== Logs =====
 async function loadLogs() {
   const [logsRes, statsRes] = await Promise.all([
@@ -68,15 +78,21 @@ async function loadLogs() {
     tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;padding:20px">ยังไม่มีบันทึก</td></tr>';
     return;
   }
-  tbody.innerHTML = logs.map((l, i) => `
+  tbody.innerHTML = logs.map((l, i) => {
+    const isOut  = l.check_type === 'OUT';
+    const badge  = isOut
+      ? '<span class="badge" style="background:#fff3e0;color:#e65100">🚪 OUT</span>'
+      : '<span class="badge badge-in">✅ IN</span>';
+    return `
     <tr>
       <td>${i + 1}</td>
       <td><strong>${l.name || 'Unknown'}</strong></td>
       <td>${l.finger_id}</td>
       <td>${l.device_id}</td>
       <td>${fmtTime(l.check_time)}</td>
-      <td><span class="badge badge-in">เข้างาน</span></td>
-    </tr>`).join('');
+      <td>${badge}</td>
+    </tr>`;
+  }).join('');
 }
 
 // ===== Users =====
@@ -114,7 +130,7 @@ async function loadUsers() {
         <td>${badge}</td>
         <td style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-enroll" onclick="startEnroll(${u.finger_id},'${u.name}')">👆 ลงทะเบียนนิ้ว</button>
-          <button class="btn btn-primary" onclick="editUser(${u.finger_id},'${u.name}','${u.employee_id || ''}','${u.department || ''}')">✏️</button>
+          <button class="btn btn-primary" onclick="editUser(${u.finger_id},'${u.name}','${u.employee_id||''}','${u.department||''}',${u.base_salary||0},${u.attendance_bonus||0},'${u.work_start_time||'08:00'}',${u.late_grace_minutes||15})">✏️</button>
           <button class="btn btn-danger"  onclick="deleteUser(${u.finger_id})">🗑️</button>
         </td>
       </tr>`;
@@ -213,20 +229,29 @@ function cancelEnroll() {
 }
 
 // ===== Save / Edit / Delete =====
-function editUser(fid, name, empId, dept) {
-  document.getElementById('f-finger-id').value = fid;
-  document.getElementById('f-name').value       = name;
-  document.getElementById('f-emp-id').value     = empId;
-  document.getElementById('f-dept').value       = dept;
+function editUser(fid, name, empId, dept, salary, bonus, startTime, grace) {
+  document.getElementById('f-finger-id').value   = fid;
+  document.getElementById('f-name').value         = name;
+  document.getElementById('f-emp-id').value       = empId;
+  document.getElementById('f-dept').value         = dept;
+  document.getElementById('f-salary').value       = salary || 0;
+  document.getElementById('f-bonus').value        = bonus  || 0;
+  document.getElementById('f-start-time').value   = startTime || '08:00';
+  document.getElementById('f-grace').value        = grace  || 15;
   document.querySelector('#tab-users').scrollTo(0, 0);
+  window.scrollTo(0, 0);
 }
 
 async function saveUser() {
-  const finger_id   = document.getElementById('f-finger-id').value;
-  const name        = document.getElementById('f-name').value;
-  const employee_id = document.getElementById('f-emp-id').value;
-  const department  = document.getElementById('f-dept').value;
-  const status      = document.getElementById('user-status');
+  const finger_id         = document.getElementById('f-finger-id').value;
+  const name              = document.getElementById('f-name').value;
+  const employee_id       = document.getElementById('f-emp-id').value;
+  const department        = document.getElementById('f-dept').value;
+  const base_salary       = parseFloat(document.getElementById('f-salary').value) || 0;
+  const attendance_bonus  = parseFloat(document.getElementById('f-bonus').value)  || 0;
+  const work_start_time   = document.getElementById('f-start-time').value || '08:00';
+  const late_grace_minutes = parseInt(document.getElementById('f-grace').value) || 15;
+  const status            = document.getElementById('user-status');
 
   if (!finger_id || !name) {
     status.className = 'status error';
@@ -237,15 +262,17 @@ async function saveUser() {
   const res = await fetch(API_BASE + '/api/users', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ finger_id: parseInt(finger_id), name, employee_id, department }),
+    body: JSON.stringify({ finger_id: parseInt(finger_id), name, employee_id, department,
+                           base_salary, attendance_bonus, work_start_time, late_grace_minutes }),
   });
 
   if (res.ok) {
     status.className = 'status success';
     status.textContent = '✅ บันทึกเรียบร้อย';
-    ['f-finger-id', 'f-name', 'f-emp-id', 'f-dept'].forEach(id => {
+    ['f-finger-id','f-name','f-emp-id','f-dept','f-salary','f-bonus','f-grace'].forEach(id => {
       document.getElementById(id).value = '';
     });
+    document.getElementById('f-start-time').value = '08:00';
     loadUsers();
   }
   setTimeout(() => { status.className = 'status'; }, 3000);
@@ -280,7 +307,164 @@ async function resetAllData() {
   }
 }
 
+// ===== Report & Payroll =====
+let editingCommFid = null;
+let currentReportData = null;
+
+async function loadReport() {
+  const month = document.getElementById('r-month').value;
+  const year  = document.getElementById('r-year').value;
+  document.getElementById('report-body').innerHTML =
+    '<tr><td colspan="8" style="text-align:center;color:#999;padding:20px">กำลังโหลด...</td></tr>';
+
+  const res  = await fetch(API_BASE + `/api/report?year=${year}&month=${month}`);
+  const data = await res.json();
+  currentReportData = data;
+  renderReport(data);
+}
+
+function renderReport(data) {
+  const tbody  = document.getElementById('report-body');
+  const tfoot  = document.getElementById('report-foot');
+  const sumDiv = document.getElementById('report-summary');
+
+  if (!data.report.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;padding:20px">ไม่มีข้อมูลพนักงาน</td></tr>';
+    return;
+  }
+
+  let totBase = 0, totBonus = 0, totComm = 0, totPay = 0, totPresent = 0;
+
+  tbody.innerHTML = data.report.map(u => {
+    totBase    += u.base_salary;
+    totBonus   += u.bonus_earned;
+    totComm    += u.commission;
+    totPay     += u.total_pay;
+    totPresent += u.days_present;
+
+    const lateColor  = u.days_late > 0 ? '#c62828' : '#2e7d32';
+    const lateTxt    = u.days_late > 0 ? `⚠️ ${u.days_late} วัน` : '✅ ไม่สาย';
+    const bonusTxt   = u.attendance_bonus > 0 && u.bonus_earned === 0
+      ? `<span style="color:#999;font-size:12px">(สาย)</span>` : '';
+
+    return `
+      <tr>
+        <td>
+          <div><strong>${u.name}</strong></div>
+          <div style="font-size:11px;color:#888">${u.employee_id || ''} ${u.department ? '· '+u.department : ''}</div>
+        </td>
+        <td style="text-align:center">${u.days_present} วัน</td>
+        <td style="text-align:center;color:${lateColor}">${lateTxt}</td>
+        <td style="text-align:right">${fmtMoney(u.base_salary)}</td>
+        <td style="text-align:right">
+          <span style="color:${u.bonus_earned > 0 ? '#2e7d32' : '#999'}">${fmtMoney(u.bonus_earned)}</span>
+          ${bonusTxt}
+        </td>
+        <td style="text-align:right" id="comm-cell-${u.finger_id}">
+          <span>${fmtMoney(u.commission)}</span>
+          <button class="btn btn-primary" style="padding:2px 8px;font-size:12px;margin-left:6px"
+            onclick="openCommModal(${u.finger_id},'${u.name}',${u.commission},'${u.commission_notes.replace(/'/g,"\\'")}')">✏️</button>
+        </td>
+        <td style="text-align:right"><strong>${fmtMoney(u.total_pay)}</strong></td>
+        <td>
+          <button class="btn btn-primary" style="padding:4px 10px;font-size:12px"
+            onclick="showDaily(${u.finger_id})">📅 รายวัน</button>
+        </td>
+      </tr>`;
+  }).join('');
+
+  tfoot.innerHTML = `
+    <tr style="background:#f5f5f5;font-weight:bold">
+      <td>รวมทั้งหมด (${data.report.length} คน)</td>
+      <td style="text-align:center">${totPresent} วัน</td>
+      <td></td>
+      <td style="text-align:right">${fmtMoney(totBase)}</td>
+      <td style="text-align:right">${fmtMoney(totBonus)}</td>
+      <td style="text-align:right">${fmtMoney(totComm)}</td>
+      <td style="text-align:right">${fmtMoney(totPay)}</td>
+      <td></td>
+    </tr>`;
+
+  const monthNames = ['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.',
+                      'ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+  sumDiv.innerHTML = [
+    { label: '👥 พนักงาน', value: data.report.length + ' คน', color: '#e3f2fd' },
+    { label: '📅 วันทำงาน', value: Math.round(totPresent / (data.report.length || 1)) + ' วัน/คน', color: '#e8f5e9' },
+    { label: '💰 ยอดรวม', value: '฿' + fmtMoney(totPay), color: '#fff3e0' },
+  ].map(c => `
+    <div class="stat" style="background:${c.color};flex:1;min-width:140px">
+      <div class="stat-num" style="font-size:18px">${c.value}</div>
+      <div class="stat-label">${c.label} ${monthNames[data.month]} ${data.year}</div>
+    </div>`).join('');
+}
+
+function openCommModal(fid, name, amount, notes) {
+  editingCommFid = fid;
+  document.getElementById('comm-modal-title').textContent = `ค่าคอม: ${name}`;
+  document.getElementById('comm-amount').value = amount;
+  document.getElementById('comm-notes').value  = notes;
+  document.getElementById('comm-modal').classList.add('show');
+}
+
+async function saveCommission() {
+  if (!editingCommFid) return;
+  const month  = parseInt(document.getElementById('r-month').value);
+  const year   = parseInt(document.getElementById('r-year').value);
+  const amount = parseFloat(document.getElementById('comm-amount').value) || 0;
+  const notes  = document.getElementById('comm-notes').value;
+
+  await fetch(API_BASE + '/api/commission', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ finger_id: editingCommFid, year, month, commission_amount: amount, notes }),
+  });
+
+  document.getElementById('comm-modal').classList.remove('show');
+  editingCommFid = null;
+  loadReport();
+}
+
+function showDaily(fingerId) {
+  if (!currentReportData) return;
+  const u = currentReportData.report.find(r => r.finger_id === fingerId);
+  if (!u) return;
+
+  const monthNames = ['','มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน',
+                      'กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+  document.getElementById('detail-title').textContent = `📅 ${u.name}`;
+  document.getElementById('detail-meta').textContent  =
+    `${monthNames[currentReportData.month]} ${currentReportData.year} · `+
+    `มา ${u.days_present} วัน · สาย ${u.days_late} วัน · `+
+    `เข้างาน ${u.work_start_time} (ผ่อนผัน ${u.late_grace_minutes} นาที)`;
+
+  const tbody = document.getElementById('detail-body');
+  if (!u.daily_records.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#999;padding:16px">ไม่มีข้อมูล</td></tr>';
+  } else {
+    tbody.innerHTML = u.daily_records.map(r => {
+      const dateObj  = new Date(r.date);
+      const dateStr  = dateObj.toLocaleDateString('th-TH', { weekday:'short', day:'numeric', month:'short' });
+      const lateBadge = r.is_late
+        ? `<span class="badge" style="background:#fce4ec;color:#c62828">⚠️ สาย ${r.late_minutes} นาที</span>`
+        : `<span class="badge" style="background:#e8f5e9;color:#2e7d32">✅ ตรงเวลา</span>`;
+      return `
+        <tr>
+          <td>${dateStr}</td>
+          <td>${fmtHHMM(r.first_in)}</td>
+          <td>${r.last_out ? fmtHHMM(r.last_out) : '<span style="color:#999">-</span>'}</td>
+          <td>${r.work_hours !== null ? r.work_hours + ' ชม.' : '<span style="color:#999">-</span>'}</td>
+          <td>${lateBadge}</td>
+        </tr>`;
+    }).join('');
+  }
+
+  document.getElementById('detail-modal').classList.add('show');
+}
+
 // ===== Init =====
+document.getElementById('r-month').value = new Date().getMonth() + 1;
+document.getElementById('r-year').value  = new Date().getFullYear();
+
 loadLogs();
 setInterval(() => {
   if (!document.getElementById('tab-logs').classList.contains('hidden')) loadLogs();
