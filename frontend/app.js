@@ -149,7 +149,7 @@ async function startEnroll(fingerId, name) {
   document.getElementById('modal-title').textContent  = `ลงทะเบียนนิ้ว: ${name}`;
   document.getElementById('modal-desc').textContent   = 'วางนิ้วบน Sensor และค้างไว้จนจอแสดง "Remove Finger"';
   document.getElementById('modal-status').textContent = '⏳ กำลังส่งคำสั่งไปยังเครื่อง...';
-  document.getElementById('enroll-step').textContent  = 'ขั้นตอนที่ 1/2';
+  document.getElementById('enroll-step').textContent  = 'รอ ESP32...';
   document.getElementById('fp-icon').style.display   = 'block';
   document.getElementById('fp-canvas').style.display = 'none';
   document.getElementById('enroll-modal').classList.add('show');
@@ -160,25 +160,48 @@ async function startEnroll(fingerId, name) {
     body: JSON.stringify({ finger_id: fingerId }),
   });
 
-  document.getElementById('modal-status').textContent = '👆 วางนิ้วบน Sensor ได้เลย';
+  // Phase 1: รอ ESP32 รับคำสั่ง (poll /api/enroll-watch — ไม่แตะ queue)
+  // Phase 2: รอ enroll สำเร็จ (poll /api/users จนกว่า enrolled=true)
+  let phase = 'waiting';
+  let elapsed = 0;
 
   enrollPolling = setInterval(async () => {
-    const data = await fetch(API_BASE + '/api/enroll-pending').then(r => r.json());
-    if (!data.pending && currentEnrollId !== null) {
+    elapsed += 2;
+    if (elapsed > 120) {
       clearInterval(enrollPolling);
-      document.getElementById('modal-status').textContent = '✅ ลงทะเบียนสำเร็จ!';
-      document.getElementById('enroll-step').textContent  = 'เสร็จสิ้น ✅';
+      currentEnrollId = null;
+      document.getElementById('modal-status').textContent = '⏰ หมดเวลา กรุณาลองใหม่';
+      setTimeout(cancelEnroll, 2500);
+      return;
+    }
 
-      const canvas = document.getElementById('fp-canvas');
-      canvas.style.display = 'block';
-      document.getElementById('fp-icon').style.display = 'none';
-      drawFingerprint(canvas, fingerId * 137 + name.charCodeAt(0) * 31, true);
-
-      setTimeout(() => {
-        document.getElementById('enroll-modal').classList.remove('show');
+    if (phase === 'waiting') {
+      const watch = await fetch(API_BASE + '/api/enroll-watch').then(r => r.json());
+      if (watch.picked_up || !watch.queued) {
+        phase = 'enrolling';
+        document.getElementById('enroll-step').textContent  = 'ขั้นตอนที่ 1/2';
+        document.getElementById('modal-status').textContent = '👆 วางนิ้วบน Sensor ได้เลย';
+      } else {
+        document.getElementById('modal-status').textContent = `⏳ รอ ESP32 รับคำสั่ง... (${elapsed}s)`;
+      }
+    } else {
+      const users = await fetch(API_BASE + '/api/users').then(r => r.json());
+      const user  = users.find(u => u.finger_id === fingerId);
+      document.getElementById('modal-status').textContent = `👆 กำลังแสกนนิ้ว... (${elapsed}s)`;
+      if (user && (user.enrolled || user.confidence > 0)) {
+        clearInterval(enrollPolling);
         currentEnrollId = null;
-        loadUsers();
-      }, 2000);
+        document.getElementById('modal-status').textContent = '✅ ลงทะเบียนสำเร็จ!';
+        document.getElementById('enroll-step').textContent  = 'เสร็จสิ้น ✅';
+        const canvas = document.getElementById('fp-canvas');
+        canvas.style.display = 'block';
+        document.getElementById('fp-icon').style.display = 'none';
+        drawFingerprint(canvas, fingerId * 137 + name.charCodeAt(0) * 31, true);
+        setTimeout(() => {
+          document.getElementById('enroll-modal').classList.remove('show');
+          loadUsers();
+        }, 2000);
+      }
     }
   }, 2000);
 }
@@ -232,6 +255,22 @@ async function deleteUser(fid) {
   if (!confirm(`ลบ Finger ID ${fid} ใช่ไหม?`)) return;
   await fetch(API_BASE + '/api/users/' + fid, { method: 'DELETE' });
   loadUsers();
+}
+
+// ===== Admin Reset =====
+async function resetAllData() {
+  if (!confirm('⚠️ ลบข้อมูลทั้งหมด? (พนักงาน + บันทึกเวลา)\nไม่สามารถย้อนกลับได้!')) return;
+  if (!confirm('ยืนยันอีกครั้ง — ลบจริงๆ ใช่ไหม?')) return;
+  const res = await fetch(API_BASE + '/api/admin/reset', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: 'reset-confirm' }),
+  });
+  if (res.ok) {
+    alert('✅ ล้างข้อมูลเรียบร้อยแล้ว');
+    loadLogs();
+    loadUsers();
+  }
 }
 
 // ===== Init =====

@@ -26,6 +26,7 @@ const pool = new Pool({
 });
 
 let enrollQueue = null;
+let enrollPickedUp = false;
 
 async function initDB() {
   await pool.query(`
@@ -72,11 +73,12 @@ app.get('/api/next-finger-id', async (req, res) => {
   res.json({ next_id: result.rows[0].next_id });
 });
 
-// ESP32 — poll คำสั่ง enroll
+// ESP32 — poll คำสั่ง enroll (clears queue — ESP32 only)
 app.get('/api/enroll-pending', (req, res) => {
   if (enrollQueue !== null) {
     const id = enrollQueue;
     enrollQueue = null;
+    enrollPickedUp = true;
     res.json({ pending: true, finger_id: id });
   } else {
     res.json({ pending: false });
@@ -90,6 +92,7 @@ app.post('/api/enroll-complete', async (req, res) => {
     'UPDATE fp_users SET confidence=$2, fp_pattern=$3, enrolled=TRUE WHERE finger_id=$1',
     [finger_id, confidence || 50, fp_pattern || null]
   );
+  enrollPickedUp = false;
   res.json({ success: true });
 });
 
@@ -97,7 +100,20 @@ app.post('/api/enroll-complete', async (req, res) => {
 app.post('/api/enroll-request', (req, res) => {
   const { finger_id } = req.body;
   enrollQueue = finger_id;
+  enrollPickedUp = false;
   res.json({ success: true, finger_id });
+});
+
+// WEB — ดูสถานะ enroll โดยไม่แตะ queue (safe for frontend polling)
+app.get('/api/enroll-watch', (req, res) => {
+  res.json({ queued: enrollQueue !== null, picked_up: enrollPickedUp });
+});
+
+// ADMIN — ล้างข้อมูลทั้งหมด
+app.delete('/api/admin/reset', async (req, res) => {
+  if (req.body.key !== 'reset-confirm') return res.status(403).json({ error: 'Forbidden' });
+  await pool.query('TRUNCATE attendance_logs, fp_users RESTART IDENTITY');
+  res.json({ success: true });
 });
 
 // WEB — รายชื่อพนักงาน

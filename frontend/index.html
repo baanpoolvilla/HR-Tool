@@ -86,7 +86,10 @@
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <h2>👥 รายชื่อพนักงาน</h2>
-      <button class="btn btn-primary" onclick="loadUsers()">🔄 รีเฟรช</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary" onclick="loadUsers()">🔄 รีเฟรช</button>
+        <button class="btn btn-danger"  onclick="resetAllData()">🗑️ ล้างข้อมูลทั้งหมด</button>
+      </div>
     </div>
     <table>
       <thead>
