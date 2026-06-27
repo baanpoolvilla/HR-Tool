@@ -3,17 +3,17 @@ const https    = require('https');
 const { Pool } = require('pg');
 const app = express();
 
-async function sendLineNotify(token, message) {
-  if (!token) return;
-  const body = new URLSearchParams({ message }).toString();
+async function sendLineMessage(token, to, message) {
+  if (!token || !to) return;
+  const body = JSON.stringify({ to, messages: [{ type: 'text', text: message }] });
   return new Promise((resolve) => {
     const req = https.request({
-      hostname: 'notify-api.line.me',
-      path:     '/api/notify',
+      hostname: 'api.line.me',
+      path:     '/v2/bot/message/push',
       method:   'POST',
       headers: {
         'Authorization':  'Bearer ' + token,
-        'Content-Type':   'application/x-www-form-urlencoded',
+        'Content-Type':   'application/json',
         'Content-Length': Buffer.byteLength(body),
       },
     }, (res) => { res.on('data', () => {}); res.on('end', resolve); });
@@ -103,7 +103,8 @@ async function initDB() {
   `);
   await pool.query(`
     INSERT INTO system_settings (key, value, label) VALUES
-      ('line_notify_token', '', 'LINE Notify Token')
+      ('line_channel_token', '', 'LINE Channel Access Token'),
+      ('line_user_id',       '', 'LINE User ID / Group ID')
     ON CONFLICT (key) DO NOTHING;
   `);
 
@@ -186,16 +187,20 @@ app.post('/api/attendance', async (req, res) => {
     [device_id, finger_id, name, check_type, is_late]
   );
 
-  // LINE Notify
-  const tokenRow = await pool.query(`SELECT value FROM system_settings WHERE key='line_notify_token'`);
+  // LINE Messaging API
+  const [tokenRow, userRow] = await Promise.all([
+    pool.query(`SELECT value FROM system_settings WHERE key='line_channel_token'`),
+    pool.query(`SELECT value FROM system_settings WHERE key='line_user_id'`),
+  ]);
   const lineToken = tokenRow.rows[0]?.value;
-  if (lineToken) {
-    const th    = toTH(new Date());
-    const hhmm  = `${String(th.getUTCHours()).padStart(2,'0')}:${String(th.getUTCMinutes()).padStart(2,'0')}`;
+  const lineUser  = userRow.rows[0]?.value;
+  if (lineToken && lineUser) {
+    const th       = toTH(new Date());
+    const hhmm     = `${String(th.getUTCHours()).padStart(2,'0')}:${String(th.getUTCMinutes()).padStart(2,'0')}`;
     const typeIcon = check_type === 'IN' ? '🟢 เข้างาน' : '🔴 ออกงาน';
     const lateText = (check_type === 'IN' && is_late) ? '  ⚠️ สาย!' : '';
-    const msg = `\n${typeIcon}${lateText}\n👤 ${name}\n🕐 ${hhmm}\n📍 ${device_id}`;
-    sendLineNotify(lineToken, msg).catch(() => {});
+    const msg = `${typeIcon}${lateText}\n👤 ${name}\n🕐 ${hhmm}\n📍 ${device_id}`;
+    sendLineMessage(lineToken, lineUser, msg).catch(() => {});
   }
 
   res.json({ success: true, status: 'ok', name, finger_id, check_type, is_late });
