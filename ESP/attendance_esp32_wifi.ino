@@ -416,7 +416,13 @@ void setup() {
   delay(1500);
 
   // เปิด Hardware Watchdog — reset อัตโนมัติถ้าค้างเกิน 25s
-  esp_task_wdt_init(WDT_TIMEOUT, true);
+  esp_task_wdt_config_t wdt_cfg = {
+    .timeout_ms    = WDT_TIMEOUT * 1000,
+    .idle_core_mask = 0,
+    .trigger_panic  = true,
+  };
+  esp_task_wdt_deinit();
+  esp_task_wdt_init(&wdt_cfg);
   esp_task_wdt_add(NULL);
 }
 
