@@ -60,8 +60,10 @@ const char* ntpServer   = "pool.ntp.org";
 const long  gmtOffset   = 25200;
 const int   daylightOffset = 0;
 
-unsigned long lastPoll      = 0;
-unsigned long lastWifiCheck = 0;
+unsigned long lastPoll         = 0;
+unsigned long lastWifiCheck    = 0;
+unsigned long lastSensorReinit = 0;
+int consecutiveScanFails       = 0;
 
 volatile bool clockEnabled = true;  // false = ห้าม clock task วาดทับ
 SemaphoreHandle_t oledMutex = NULL; // ป้องกัน Core 0 / Core 1 เขียน I2C พร้อมกัน
@@ -404,10 +406,30 @@ void checkWifi() {
   clockEnabled = true;
 }
 
+// ===== Reinit sensor — แก้ UART stuck หลัง idle นาน =====
+void reinitSensor() {
+  fpSerial.end();
+  delay(300);
+  fpSerial.begin(57600, SERIAL_8N1, FP_RX, FP_TX);
+  delay(300);
+  finger.begin(57600);
+  finger.verifyPassword();
+  finger.getTemplateCount();
+  while (fpSerial.available()) fpSerial.read(); // flush buffer
+  consecutiveScanFails = 0;
+  lastSensorReinit     = millis();
+}
+
 // ===== แสกนนิ้ว =====
 int scanFinger() {
-  setFingerLED(false);
-  if (finger.getImage() != FINGERPRINT_OK) return -1;
+  // flush stale UART data ก่อนทุกครั้ง
+  while (fpSerial.available()) fpSerial.read();
+
+  uint8_t img = finger.getImage();
+  if (img == FINGERPRINT_NOFINGER) { consecutiveScanFails = 0; return -1; }
+  if (img != FINGERPRINT_OK)       { consecutiveScanFails++; return -1; }
+
+  consecutiveScanFails = 0;
   setFingerLED(true);
   if (finger.image2Tz()     != FINGERPRINT_OK) { setFingerLED(false); return -1; }
   if (finger.fingerSearch() != FINGERPRINT_OK) { setFingerLED(false); return -2; }
@@ -433,7 +455,7 @@ void setup() {
   oledOK = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   if (!oledOK) oledOK = display.begin(SSD1306_SWITCHCAPVCC, 0x3D);
 
-  showMsg("Attendance", "System v5.1", "Starting...");
+  showMsg("Attendance", "System v5.2", "Starting...");
   delay(1000);
 
   fpSerial.begin(57600, SERIAL_8N1, FP_RX, FP_TX);
@@ -524,6 +546,15 @@ void loop() {
     lastPoll = millis();
     checkEnrollCmd();
     checkSensorClearCmd();
+  }
+
+  // Reinit sensor ทุก 10 นาที เพื่อล้าง UART state สะสม
+  if (millis() - lastSensorReinit > 600000UL) {
+    reinitSensor();
+  }
+  // Reinit เมื่อ error ต่อเนื่องผิดปกติ (sensor ค้าง)
+  if (consecutiveScanFails > 20) {
+    reinitSensor();
   }
 
   int id = scanFinger();
