@@ -61,8 +61,9 @@ const long  gmtOffset   = 25200;
 const int   daylightOffset = 0;
 
 unsigned long lastPoll      = 0;
-unsigned long lastClock     = 0;
 unsigned long lastWifiCheck = 0;
+
+volatile bool clockEnabled = true;  // false = ห้าม clock task วาดทับ
 
 // ===== เวลา =====
 String getTimeStr() {
@@ -217,16 +218,19 @@ bool httpGet(String url, String &respOut) {
 // ===== ส่งข้อมูลเข้างาน =====
 void sendAttendance(int fingerId) {
   if (WiFi.status() != WL_CONNECTED) {
+    clockEnabled = false;
     showMsg("No Internet!", "Cannot record", "");
     return;
   }
   String resp;
   String body = "{\"device_id\":\"" + DEVICE_ID + "\",\"finger_id\":" + String(fingerId) + "}";
+  // HTTP runs while clockEnabled=true → clock updates on Core 0
   httpPost(SERVER_URL + "/api/attendance", body, resp);
 
   String name = "Unknown";
   int ni = resp.indexOf("\"name\":\"");
   if (ni >= 0) { int s = ni+8; name = resp.substring(s, resp.indexOf("\"",s)); }
+  clockEnabled = false;
   showCheckin(name, fingerId);
 }
 
@@ -240,6 +244,7 @@ void notifyEnrollDone(int id) {
 
 // ===== ลงทะเบียนนิ้ว =====
 bool enrollFinger(int id) {
+  clockEnabled = false;
   showEnroll(id, 1, "Place finger");
   delay(1000);
 
@@ -271,6 +276,7 @@ bool enrollFinger(int id) {
   beepEnroll();
   notifyEnrollDone(id);
   finger.getTemplateCount();
+  clockEnabled = true;
   return true;
 }
 
@@ -282,10 +288,12 @@ void checkEnrollCmd() {
     int idx = resp.indexOf("\"finger_id\":");
     if (idx >= 0) {
       int fid = resp.substring(idx + 12).toInt();
+      clockEnabled = false;
       showMsg("Web Command:", "Enroll ID: " + String(fid), "Get ready...");
       delay(1500);
-      enrollFinger(fid);
+      enrollFinger(fid);  // enrollFinger จัดการ clockEnabled เอง
       delay(2000);
+      clockEnabled = true;
     }
   }
 }
@@ -295,6 +303,7 @@ void checkSensorClearCmd() {
   String resp;
   if (!httpGet(SERVER_URL + "/api/sensor-clear-pending", resp)) return;
   if (resp.indexOf("\"pending\":true") >= 0) {
+    clockEnabled = false;
     showMsg("Clearing...", "Sensor memory", "Please wait");
     uint8_t r = finger.emptyDatabase();
     if (r == FINGERPRINT_OK) {
@@ -306,6 +315,7 @@ void checkSensorClearCmd() {
       beepFail();
     }
     delay(3000);
+    clockEnabled = true;
   }
 }
 
@@ -340,6 +350,14 @@ int scanFinger() {
   if (finger.fingerSearch() != FINGERPRINT_OK) { setFingerLED(false); return -2; }
   setFingerLED(false);
   return finger.fingerID;
+}
+
+// ===== Clock Task (Core 0) — อัปเดตนาฬิกาทุก 1 วินาที แม้ HTTP กำลัง block =====
+void clockTaskFunc(void *param) {
+  for (;;) {
+    if (clockEnabled) showMain();
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
 }
 
 // ===== SETUP =====
@@ -415,6 +433,9 @@ void setup() {
   beepStart();
   delay(1500);
 
+  // เริ่ม Clock Task บน Core 0
+  xTaskCreatePinnedToCore(clockTaskFunc, "clock", 4096, NULL, 1, NULL, 0);
+
   // เปิด Hardware Watchdog — reset อัตโนมัติถ้าค้างเกิน 25s
   esp_task_wdt_config_t wdt_cfg = {
     .timeout_ms    = WDT_TIMEOUT * 1000,
@@ -439,22 +460,18 @@ void loop() {
     checkSensorClearCmd();
   }
 
-  if (millis() - lastClock > 1000) {
-    lastClock = millis();
-    showMain();
-  }
-
   int id = scanFinger();
   if (id > 0) {
     beepOK();
-    sendAttendance(id);
+    sendAttendance(id);   // sets clockEnabled=false inside, shows check-in screen
     delay(3000);
-    showMain();
+    clockEnabled = true;  // re-enable clock task to take over
   } else if (id == -2) {
+    clockEnabled = false;
     beepNotFound();
     showNotFound();
     delay(2500);
-    showMain();
+    clockEnabled = true;
   }
 
   delay(100);
