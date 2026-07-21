@@ -16,12 +16,28 @@
 </head>
 <body>
 
+<div id="login-screen" class="login-screen">
+  <div class="login-box">
+    <div style="font-size:40px;margin-bottom:8px">👆</div>
+    <h2>เข้าสู่ระบบ</h2>
+    <p style="color:#888;font-size:13px;margin-bottom:16px">ระบบลงเวลาทำงาน — สำหรับผู้ดูแลระบบ</p>
+    <input type="password" id="login-password" placeholder="รหัสผ่าน"
+           style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;margin-bottom:10px"
+           onkeydown="if(event.key==='Enter') login()">
+    <div id="login-status" class="status"></div>
+    <button class="btn btn-success" style="width:100%;margin-top:8px" onclick="login()">เข้าสู่ระบบ</button>
+  </div>
+</div>
+
+<div id="app-shell" class="hidden">
+
 <div class="header">
   <span style="font-size:28px">👆</span>
-  <div>
+  <div style="flex:1">
     <h1>ระบบลงเวลาทำงาน</h1>
     <div style="font-size:12px;opacity:0.8">Fingerprint Attendance System</div>
   </div>
+  <button class="btn" style="background:rgba(255,255,255,0.15);color:white" onclick="logout()">ออกจากระบบ</button>
 </div>
 
 <div class="tabs">
@@ -221,6 +237,15 @@
         <input type="text" id="cfg-line-user" placeholder="กด capture อัตโนมัติ หรือกรอก C..." style="font-family:monospace" readonly>
       </div>
     </div>
+    <div class="form-row" style="margin-top:8px">
+      <div class="form-group" style="flex:2">
+        <label>🔑 LINE Channel Secret</label>
+        <input type="text" id="cfg-line-secret" placeholder="จาก developers.line.biz → Basic settings → Channel secret" style="font-family:monospace">
+      </div>
+    </div>
+    <div style="background:#fff3e0;border-radius:8px;padding:10px 14px;margin-top:4px;font-size:13px;color:#e65100">
+      <strong>ต้องกรอก Channel Secret ด้วย</strong> — ใช้ตรวจสอบว่า webhook ที่เข้ามาเป็นของ LINE จริง (ไม่งั้นระบบจะปฏิเสธ webhook ทั้งหมด)
+    </div>
     <div style="background:#e8f5e9;border-radius:8px;padding:10px 14px;margin-top:4px;font-size:13px;color:#1b5e20">
       <strong>วิธีเชื่อมกลุ่ม LINE:</strong>
       1) ไป <a href="https://developers.line.biz" target="_blank">developers.line.biz</a> → Messaging API → Webhook URL → ใส่ <code style="background:#c8e6c9;padding:1px 4px;border-radius:3px">https://attendance.poolvillapattayaparty.com/api/line-webhook</code>
@@ -313,6 +338,8 @@
     <p id="view-info" style="margin-bottom:16px"></p>
     <button class="btn btn-primary" onclick="document.getElementById('view-modal').classList.remove('show')">ปิด</button>
   </div>
+</div>
+
 </div>
 
 <script src="app.js"></script>

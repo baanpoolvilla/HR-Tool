@@ -2,19 +2,20 @@
 #include <WiFiManager.h>
 #include <HTTPClient.h>
 #include <Adafruit_Fingerprint.h>
-#include <Adafruit_SSD1306.h>
-#include <Adafruit_GFX.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 #include <Preferences.h>
 #include <time.h>
 #include <esp_task_wdt.h>
 
 #define WDT_TIMEOUT 25  // auto-restart ถ้าค้างเกิน 25 วินาที
 
-// ===== OLED =====
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
-bool oledOK = false;
+// ===== LCD 16x2 (I2C / PCF8574) =====
+#define LCD_COLS 16
+#define LCD_ROWS 2
+LiquidCrystal_I2C* lcd = nullptr;   // สร้างหลังสแกนหา address จริง
+uint8_t lcdAddr = 0x27;
+bool lcdReady = false;
 
 // ===== FINGERPRINT =====
 #define FP_RX 16
@@ -50,6 +51,13 @@ void setFingerLED(bool on) {
 #define DEFAULT_SERVER_URL "https://attendance.poolvillapattayaparty.com"
 #define DEFAULT_DEVICE_ID  "OFFICE"
 
+// ===== WiFi หลัก — ต่อตัวนี้ก่อนเสมอ ถ้าไม่ติดค่อยเปิด FP-Setup portal =====
+#define WIFI_SSID "Office_2.4GHz"
+#define WIFI_PASS "123456789"
+
+// ===== Device key — ต้องตรงกับ DEVICE_API_KEY บนเซิร์ฟเวอร์ =====
+#define DEVICE_KEY "CHANGE_ME_DEVICE_KEY"
+
 String SERVER_URL = DEFAULT_SERVER_URL;
 String DEVICE_ID  = DEFAULT_DEVICE_ID;
 
@@ -60,13 +68,19 @@ const char* ntpServer   = "pool.ntp.org";
 const long  gmtOffset   = 25200;
 const int   daylightOffset = 0;
 
-unsigned long lastPoll         = 0;
 unsigned long lastWifiCheck    = 0;
 unsigned long lastSensorReinit = 0;
 int consecutiveScanFails       = 0;
 
 volatile bool clockEnabled = true;  // false = ห้าม clock task วาดทับ
-SemaphoreHandle_t oledMutex = NULL; // ป้องกัน Core 0 / Core 1 เขียน I2C พร้อมกัน
+SemaphoreHandle_t lcdMutex = NULL;  // ป้องกัน Core 0 / Core 1 เขียน I2C พร้อมกัน
+
+// ===== งานจากเว็บ: netTask (Core 0) ตั้งค่า flag → loop (Core 1) ลงมือทำ =====
+// แยก network polling ออกจากลูปสแกน เพื่อให้ "วางนิ้วแล้วสแกนทันที" ไม่โดน HTTP บล็อก
+volatile int  pendingEnrollId    = -1;    // >=0 = มีคำสั่ง enroll รอทำ
+volatile bool pendingSensorClear = false; // true = มีคำสั่งล้างเซนเซอร์รอทำ
+volatile bool sensorBusy         = false; // true = core1 กำลังใช้เซนเซอร์ (enroll/clear) → core0 หยุด poll
+SemaphoreHandle_t netMutex = NULL;  // serialize HTTP ข้าม 2 core (GET บน core0 / POST บน core1)
 
 // ===== เวลา =====
 String getTimeStr() {
@@ -77,158 +91,106 @@ String getTimeStr() {
   return String(buf);
 }
 
-String getDateStr() {
-  struct tm t;
-  if (!getLocalTime(&t)) return "";
-  const char* days[]   = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
-  const char* months[] = {"Jan","Feb","Mar","Apr","May","Jun",
-                           "Jul","Aug","Sep","Oct","Nov","Dec"};
-  char buf[24];
-  sprintf(buf, "%s %d %s %d", days[t.tm_wday], t.tm_mday, months[t.tm_mon], t.tm_year+1900);
-  return String(buf);
+// ===== LCD helper — เขียนทั้งบรรทัด เติมช่องว่างจนเต็ม 16 ตัว =====
+// (ไม่ใช้ lcd->clear() เพื่อลดอาการจอกระพริบ)
+void lcdRow(uint8_t row, String s) {
+  if (!lcdReady || !lcd) return;
+  if ((int)s.length() > LCD_COLS) s = s.substring(0, LCD_COLS);
+  while ((int)s.length() < LCD_COLS) s += ' ';
+  lcd->setCursor(0, row);
+  lcd->print(s);
 }
 
-// ===== หน้าจอ =====
+// ===== หน้าจอหลัก (clock task เรียกทุก 1 วินาที) =====
 void showMain() {
-  if (!oledOK || !oledMutex) return;
-  // ถ้า Core 1 กำลังใช้ display อยู่ → ข้ามเฟรมนี้ไปแทนที่จะรอ
-  if (xSemaphoreTake(oledMutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
-  display.clearDisplay();
-  display.fillRect(0, 0, 128, 13, SSD1306_WHITE);
-  display.setTextColor(SSD1306_BLACK);
-  display.setTextSize(1);
-  display.setCursor(15, 3);
-  display.print("ATTENDANCE SYSTEM");
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 16);
-  display.print(getDateStr());
-  display.setTextSize(2);
-  String t = getTimeStr();
-  int tw = t.length() * 12;
-  display.setCursor((128 - tw) / 2, 27);
-  display.print(t);
-  display.drawLine(0, 49, 128, 49, SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 53);
-  display.print("Place finger...");
-  // WiFi indicator
-  display.fillCircle(122, 56, 3,
-    WiFi.status() == WL_CONNECTED ? SSD1306_WHITE : SSD1306_BLACK);
-  if (WiFi.status() != WL_CONNECTED)
-    display.drawCircle(122, 56, 3, SSD1306_WHITE);
-  display.display();
-  xSemaphoreGive(oledMutex);
+  if (!lcdReady || !lcdMutex) return;
+  // ถ้า Core 1 กำลังใช้จออยู่ → ข้ามเฟรมนี้แทนที่จะรอ
+  if (xSemaphoreTake(lcdMutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+
+  struct tm t;
+  char l0[20];
+  if (getLocalTime(&t)) {
+    const char* months[] = {"Jan","Feb","Mar","Apr","May","Jun",
+                            "Jul","Aug","Sep","Oct","Nov","Dec"};
+    snprintf(l0, sizeof(l0), "%2d %s %02d:%02d:%02d",
+             t.tm_mday, months[t.tm_mon], t.tm_hour, t.tm_min, t.tm_sec);
+  } else {
+    snprintf(l0, sizeof(l0), "   --:--:--");
+  }
+  lcdRow(0, l0);
+  lcdRow(1, WiFi.status() == WL_CONNECTED ? "Place finger..." : "**  NO WIFI  **");
+
+  xSemaphoreGive(lcdMutex);
 }
 
+// ===== ข้อความทั่วไป — ใช้ 2 บรรทัด (l3/inv เก็บไว้เพื่อ compat แต่ไม่ใช้บนจอ 16x2) =====
 void showMsg(String l1, String l2 = "", String l3 = "", bool inv = false) {
-  if (!oledOK || !oledMutex) return;
-  xSemaphoreTake(oledMutex, portMAX_DELAY);
-  display.clearDisplay();
-  if (inv) { display.fillRect(0,0,128,64,SSD1306_WHITE); display.setTextColor(SSD1306_BLACK); }
-  else display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0,  4); display.println(l1);
-  display.setCursor(0, 24); display.println(l2);
-  display.setCursor(0, 44); display.println(l3);
-  display.display();
-  xSemaphoreGive(oledMutex);
+  if (!lcdReady || !lcdMutex) return;
+  xSemaphoreTake(lcdMutex, portMAX_DELAY);
+  lcdRow(0, l1);
+  lcdRow(1, l2.length() ? l2 : l3);
+  xSemaphoreGive(lcdMutex);
 }
 
+// ===== หน้าเช็คอิน/เช็คเอาท์ =====
 void showCheckin(String name, int id, String checkType, bool isLate = false) {
-  if (!oledOK || !oledMutex) return;
-  xSemaphoreTake(oledMutex, portMAX_DELAY);
-  display.clearDisplay();
-  display.fillRect(0, 0, 128, 14, SSD1306_WHITE);
-  display.setTextColor(SSD1306_BLACK);
-  display.setTextSize(1);
-  String hdr = (checkType == "OUT") ? "CHECK-OUT OK!" :
-               (isLate             ? "LATE CHECK-IN!" : "CHECK-IN OK!");
-  int xpos = max(0, (128 - (int)hdr.length() * 6) / 2);
-  display.setCursor(xpos, 3);
-  display.print(hdr);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 18);
-  display.print("Name: ");
-  if (name.length() > 12) name = name.substring(0, 12) + "..";
-  display.print(name);
-  display.setCursor(0, 30);
-  display.print("ID: "); display.print(id);
-  display.setCursor(0, 44);
-  display.print(getTimeStr());
-  display.setCursor(0, 54);
-  display.print(getDateStr());
-  display.display();
-  xSemaphoreGive(oledMutex);
+  if (!lcdReady || !lcdMutex) return;
+  xSemaphoreTake(lcdMutex, portMAX_DELAY);
+  String tag = (checkType == "OUT") ? "OUT" : (isLate ? "LATE" : "IN");
+  lcdRow(0, tag + " " + name);                        // เช่น "IN John Smith"
+  lcdRow(1, getTimeStr() + " ID:" + String(id));      // เช่น "11:22:33 ID:5"
+  xSemaphoreGive(lcdMutex);
 }
 
+// ===== หน้าลงทะเบียนนิ้ว =====
 void showEnroll(int id, int step, String msg) {
-  if (!oledOK || !oledMutex) return;
-  xSemaphoreTake(oledMutex, portMAX_DELAY);
-  display.clearDisplay();
-  display.fillRect(0, 0, 128, 14, SSD1306_WHITE);
-  display.setTextColor(SSD1306_BLACK);
-  display.setTextSize(1);
-  display.setCursor(2, 3);
-  display.print("ENROLL ID: "); display.print(id);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(30, 18);
-  display.print(step == 1 ? "[1] --> 2" : " 1  --> [2]");
-  display.setTextSize(2);
-  display.setCursor(55, 28);
-  display.print(step == 1 ? "UP" : "OK");
-  display.setTextSize(1);
-  display.setCursor(0, 52);
-  display.print(msg);
-  display.display();
-  xSemaphoreGive(oledMutex);
+  if (!lcdReady || !lcdMutex) return;
+  xSemaphoreTake(lcdMutex, portMAX_DELAY);
+  char l0[20];
+  snprintf(l0, sizeof(l0), "Enroll #%d  %d/2", id, step);  // "Enroll #5  1/2"
+  lcdRow(0, l0);
+  lcdRow(1, msg);
+  xSemaphoreGive(lcdMutex);
 }
 
+// ===== หน้าไม่พบนิ้ว =====
 void showNotFound() {
-  if (!oledOK || !oledMutex) return;
-  xSemaphoreTake(oledMutex, portMAX_DELAY);
-  display.clearDisplay();
-  display.fillRect(0, 0, 128, 14, SSD1306_WHITE);
-  display.setTextColor(SSD1306_BLACK);
-  display.setTextSize(1);
-  display.setCursor(16, 3);
-  display.print("NOT REGISTERED");
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(2);
-  display.setCursor(30, 20);
-  display.print("UNKN");
-  display.setTextSize(1);
-  display.setCursor(0, 44);
-  display.print("Finger not found");
-  display.setCursor(0, 54);
-  display.print("Contact admin");
-  display.display();
-  xSemaphoreGive(oledMutex);
+  if (!lcdReady || !lcdMutex) return;
+  xSemaphoreTake(lcdMutex, portMAX_DELAY);
+  lcdRow(0, "NOT REGISTERED");
+  lcdRow(1, "Contact admin");
+  xSemaphoreGive(lcdMutex);
 }
 
-// ===== HTTP helper พร้อม timeout =====
+// ===== HTTP helper พร้อม timeout + netMutex (กันชนกันข้าม 2 core) =====
 bool httpPost(String url, String body, String &respOut) {
   if (WiFi.status() != WL_CONNECTED) return false;
+  if (netMutex) xSemaphoreTake(netMutex, portMAX_DELAY);
   HTTPClient http;
   http.begin(url);
   http.setTimeout(5000);
   http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-Device-Key", DEVICE_KEY);
   int code = http.POST(body);
   bool ok = (code == 200 || code == 201);
   if (ok) respOut = http.getString();
   http.end();
+  if (netMutex) xSemaphoreGive(netMutex);
   return ok;
 }
 
 bool httpGet(String url, String &respOut) {
   if (WiFi.status() != WL_CONNECTED) return false;
+  if (netMutex) xSemaphoreTake(netMutex, portMAX_DELAY);
   HTTPClient http;
   http.begin(url);
-  http.setTimeout(5000);
+  http.setTimeout(2500);
+  http.addHeader("X-Device-Key", DEVICE_KEY);
   int code = http.GET();
   bool ok = (code == 200);
   if (ok) respOut = http.getString();
   http.end();
+  if (netMutex) xSemaphoreGive(netMutex);
   return ok;
 }
 
@@ -260,14 +222,14 @@ void sendAttendance(int fingerId) {
     int hi = resp.indexOf("\"check_time_hhmm\":\"");
     if (hi >= 0) { int s = hi+19; hhmm = resp.substring(s, resp.indexOf("\"",s)); }
     clockEnabled = false;
-    showMsg(name.substring(0,16), "IN: " + hhmm, "Already checked in");
+    showMsg(name, "IN: " + hhmm + " (dup)", "");
     return;
   }
 
   // สแกนซ้ำ — OUT แล้ว
   if (resp.indexOf("\"already_out\"") >= 0) {
     clockEnabled = false;
-    showMsg(name.substring(0,16), "Already complete", "IN & OUT recorded");
+    showMsg(name, "IN & OUT done", "");
     return;
   }
 
@@ -311,7 +273,7 @@ bool enrollFinger(int id) {
     beepFail(); clockEnabled = true; return false;
   }
 
-  showEnroll(id, 1, "Remove finger...");
+  showEnroll(id, 1, "Remove finger..");
   beepOK();
   delay(1500);
   while (finger.getImage() != FINGERPRINT_NOFINGER) {
@@ -319,7 +281,7 @@ bool enrollFinger(int id) {
     delay(200);
   }
 
-  showEnroll(id, 2, "Place same finger");
+  showEnroll(id, 2, "Place again");
   delay(1000);
 
   tries = 0;
@@ -332,7 +294,7 @@ bool enrollFinger(int id) {
   if (finger.createModel() != FINGERPRINT_OK) { beepFail(); clockEnabled = true; return false; }
   if (finger.storeModel(id) != FINGERPRINT_OK){ beepFail(); clockEnabled = true; return false; }
 
-  showMsg("ENROLL OK!", "ID: " + String(id), "Registered!", true);
+  showMsg("ENROLL OK!", "ID:" + String(id) + " saved", "", true);
   beepEnroll();
   notifyEnrollDone(id);
   finger.getTemplateCount();
@@ -340,43 +302,52 @@ bool enrollFinger(int id) {
   return true;
 }
 
-// ===== Poll คำสั่งจากเว็บ =====
-void checkEnrollCmd() {
+// ===== Poll คำสั่ง enroll (รันบน Core 0 — GET อย่างเดียว ไม่แตะเซนเซอร์) =====
+void pollEnrollCmd() {
   String resp;
   if (!httpGet(SERVER_URL + "/api/enroll-pending", resp)) return;
   if (resp.indexOf("\"pending\":true") >= 0) {
     int idx = resp.indexOf("\"finger_id\":");
-    if (idx >= 0) {
-      int fid = resp.substring(idx + 12).toInt();
-      clockEnabled = false;
-      showMsg("Web Command:", "Enroll ID: " + String(fid), "Get ready...");
-      delay(1500);
-      enrollFinger(fid);  // enrollFinger จัดการ clockEnabled เอง
-      delay(2000);
-      clockEnabled = true;
-    }
+    if (idx >= 0) pendingEnrollId = resp.substring(idx + 12).toInt();
   }
 }
 
-// ===== Poll คำสั่งล้างเซนเซอร์ =====
-void checkSensorClearCmd() {
+// ===== ทำ enroll จริง (รันบน Core 1 ใน loop — แตะเซนเซอร์ที่ core เดียว) =====
+void runEnroll(int fid) {
+  sensorBusy   = true;
+  clockEnabled = false;
+  showMsg("Web: Enroll", "ID:" + String(fid) + " ready...", "");
+  delay(1500);
+  enrollFinger(fid);  // enrollFinger จัดการ clockEnabled เอง
+  delay(2000);
+  clockEnabled = true;
+  sensorBusy   = false;
+}
+
+// ===== Poll คำสั่งล้างเซนเซอร์ (รันบน Core 0 — GET อย่างเดียว) =====
+void pollSensorClearCmd() {
   String resp;
   if (!httpGet(SERVER_URL + "/api/sensor-clear-pending", resp)) return;
-  if (resp.indexOf("\"pending\":true") >= 0) {
-    clockEnabled = false;
-    showMsg("Clearing...", "Sensor memory", "Please wait");
-    uint8_t r = finger.emptyDatabase();
-    if (r == FINGERPRINT_OK) {
-      finger.getTemplateCount();
-      showMsg("SENSOR CLEARED", "Count: 0", "Re-enroll needed", true);
-      beepEnroll();
-    } else {
-      showMsg("Clear FAILED!", "Error: " + String(r), "");
-      beepFail();
-    }
-    delay(3000);
-    clockEnabled = true;
+  if (resp.indexOf("\"pending\":true") >= 0) pendingSensorClear = true;
+}
+
+// ===== ล้างเซนเซอร์จริง (รันบน Core 1 ใน loop) =====
+void doSensorClear() {
+  sensorBusy   = true;
+  clockEnabled = false;
+  showMsg("Clearing sensor", "Please wait...", "");
+  uint8_t r = finger.emptyDatabase();
+  if (r == FINGERPRINT_OK) {
+    finger.getTemplateCount();
+    showMsg("SENSOR CLEARED", "Re-enroll needed", "", true);
+    beepEnroll();
+  } else {
+    showMsg("Clear FAILED!", "Error: " + String(r), "");
+    beepFail();
   }
+  delay(3000);
+  clockEnabled = true;
+  sensorBusy   = false;
 }
 
 // ===== WiFi Reconnect =====
@@ -445,6 +416,28 @@ void clockTaskFunc(void *param) {
   }
 }
 
+// ===== Network Task (Core 0) — poll คำสั่งเว็บทุก 3 วินาที =====
+// รันแยกจาก loop() บน Core 1 → HTTP ที่บล็อกจะไม่หน่วงการสแกนนิ้วอีกต่อไป
+void netTaskFunc(void *param) {
+  for (;;) {
+    if (WiFi.status() == WL_CONNECTED && !sensorBusy) {
+      pollEnrollCmd();
+      pollSensorClearCmd();
+    }
+    vTaskDelay(pdMS_TO_TICKS(3000));
+  }
+}
+
+// ===== สแกนหา I2C address ของจอ LCD (PCF8574 มักเป็น 0x27 หรือ 0x3F) =====
+uint8_t findLcdAddr() {
+  const uint8_t candidates[] = {0x27, 0x3F, 0x20, 0x38, 0x26, 0x3E};
+  for (uint8_t a : candidates) {
+    Wire.beginTransmission(a);
+    if (Wire.endTransmission() == 0) return a;
+  }
+  return 0x27;  // default เผื่อสแกนไม่เจอ
+}
+
 // ===== SETUP =====
 void setup() {
   Serial.begin(115200);
@@ -452,16 +445,20 @@ void setup() {
   digitalWrite(BUZZER_PIN, HIGH);
 
   Wire.begin(21, 22);
-  oledOK = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  if (!oledOK) oledOK = display.begin(SSD1306_SWITCHCAPVCC, 0x3D);
+  lcdAddr  = findLcdAddr();
+  lcd      = new LiquidCrystal_I2C(lcdAddr, LCD_COLS, LCD_ROWS);
+  lcd->init();
+  lcd->backlight();
+  lcdReady = true;
+  Serial.printf("LCD I2C addr = 0x%02X\n", lcdAddr);
 
-  showMsg("Attendance", "System v5.2", "Starting...");
+  showMsg("Attendance Sys", "v6.1 realtime..", "");
   delay(1000);
 
   fpSerial.begin(57600, SERIAL_8N1, FP_RX, FP_TX);
   finger.begin(57600);
   if (!finger.verifyPassword()) {
-    showMsg("ERROR!", "Check wiring", "Fingerprint");
+    showMsg("ERROR!", "Check FP wiring", "");
     while (true) delay(1000);
   }
   finger.getTemplateCount();
@@ -481,29 +478,39 @@ void setup() {
   }
   prefs.end();
 
-  // ===== WiFiManager =====
-  WiFiManager wm;
-  WiFiManagerParameter p_server("server", "Server URL", SERVER_URL.c_str(), 80);
-  WiFiManagerParameter p_device("device", "Device ID (branch)", DEVICE_ID.c_str(), 20);
-  wm.addParameter(&p_server);
-  wm.addParameter(&p_device);
+  // ===== ต่อ WiFi หลักก่อน =====
+  showMsg("Connecting WiFi", WIFI_SSID, "");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long wifiStart = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 20000) {
+    delay(250);
+  }
 
-  showMsg("Connecting WiFi", "Auto connect...", "or join FP-Setup");
-  wm.setConfigPortalTimeout(120);
-  wm.setSaveParamsCallback([&]() {
-    prefs.begin("atd", false);
-    prefs.putString("server_url", String(p_server.getValue()));
-    prefs.putString("device_id",  String(p_device.getValue()));
-    prefs.end();
-    SERVER_URL = String(p_server.getValue());
-    DEVICE_ID  = String(p_device.getValue());
-  });
+  // ===== ต่อไม่ติด → เปิด WiFiManager portal ให้ตั้งค่าเอง =====
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFiManager wm;
+    WiFiManagerParameter p_server("server", "Server URL", SERVER_URL.c_str(), 80);
+    WiFiManagerParameter p_device("device", "Device ID (branch)", DEVICE_ID.c_str(), 20);
+    wm.addParameter(&p_server);
+    wm.addParameter(&p_device);
 
-  bool connected = wm.autoConnect("FP-Setup", "12345678");
-  if (!connected) {
-    showMsg("WiFi Failed!", "Restarting...", "");
-    delay(2000);
-    ESP.restart();
+    showMsg("Connect WiFi", "or join FP-Setup", "");
+    wm.setConfigPortalTimeout(120);
+    wm.setSaveParamsCallback([&]() {
+      prefs.begin("atd", false);
+      prefs.putString("server_url", String(p_server.getValue()));
+      prefs.putString("device_id",  String(p_device.getValue()));
+      prefs.end();
+      SERVER_URL = String(p_server.getValue());
+      DEVICE_ID  = String(p_device.getValue());
+    });
+
+    if (!wm.startConfigPortal("FP-Setup", "12345678")) {
+      showMsg("WiFi Failed!", "Restarting...", "");
+      delay(2000);
+      ESP.restart();
+    }
   }
 
   // ===== Sync NTP =====
@@ -518,11 +525,14 @@ void setup() {
   beepStart();
   delay(1500);
 
-  // สร้าง mutex ก่อนเริ่ม clock task — ป้องกัน I2C race ระหว่าง Core 0/1
-  oledMutex = xSemaphoreCreateMutex();
+  // สร้าง mutex ก่อนเริ่ม task — ป้องกัน I2C race และ HTTP ชนกันระหว่าง Core 0/1
+  lcdMutex = xSemaphoreCreateMutex();
+  netMutex = xSemaphoreCreateMutex();
 
   // เริ่ม Clock Task บน Core 0
   xTaskCreatePinnedToCore(clockTaskFunc, "clock", 4096, NULL, 1, NULL, 0);
+  // เริ่ม Network Task บน Core 0 — poll คำสั่งเว็บแยกจากลูปสแกน (stack ใหญ่รองรับ TLS/HTTPS)
+  xTaskCreatePinnedToCore(netTaskFunc, "net", 16384, NULL, 1, NULL, 0);
 
   // เปิด Hardware Watchdog — reset อัตโนมัติถ้าค้างเกิน 25s
   esp_task_wdt_config_t wdt_cfg = {
@@ -539,28 +549,23 @@ void setup() {
 void loop() {
   esp_task_wdt_reset();  // บอก watchdog ว่ายังทำงานปกติ
 
-  // WiFi reconnect ทุก 60s
+  // WiFi reconnect ทุก 60s (คืนค่าเร็วถ้ายังไม่ถึงเวลา/ยังต่ออยู่)
   checkWifi();
 
-  if (millis() - lastPoll > 3000) {
-    lastPoll = millis();
-    checkEnrollCmd();
-    checkSensorClearCmd();
-  }
+  // คำสั่งจากเว็บ (netTask บน Core 0 ตั้ง flag ให้) — ทำบน Core 1 เพื่อใช้เซนเซอร์ที่ core เดียว
+  if (pendingSensorClear) { pendingSensorClear = false; doSensorClear(); return; }
+  if (pendingEnrollId >= 0) { int fid = pendingEnrollId; pendingEnrollId = -1; runEnroll(fid); return; }
 
   // Reinit sensor ทุก 10 นาที เพื่อล้าง UART state สะสม
-  if (millis() - lastSensorReinit > 600000UL) {
-    reinitSensor();
-  }
+  if (millis() - lastSensorReinit > 600000UL) reinitSensor();
   // Reinit เมื่อ error ต่อเนื่องผิดปกติ (sensor ค้าง)
-  if (consecutiveScanFails > 20) {
-    reinitSensor();
-  }
+  if (consecutiveScanFails > 20) reinitSensor();
 
+  // ===== สแกนนิ้ว — ทำทุกลูป ไม่มี HTTP มาบล็อกอีกแล้ว → วางนิ้วปุ๊บ ติดปั๊บ =====
   int id = scanFinger();
   if (id > 0) {
     beepOK();
-    sendAttendance(id);   // sets clockEnabled=false inside, shows check-in screen
+    sendAttendance(id);   // POST (ผ่าน netMutex) เกิดหลังสแกนติด — ผู้ใช้ได้ยิน beep ทันที
     delay(3000);
     clockEnabled = true;  // re-enable clock task to take over
   } else if (id == -2) {
@@ -571,5 +576,5 @@ void loop() {
     clockEnabled = true;
   }
 
-  delay(100);
+  delay(20);   // ลูปถี่ขึ้น (เดิม 100ms) → ตรวจจับนิ้วไวขึ้น
 }

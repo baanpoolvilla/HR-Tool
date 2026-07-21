@@ -1,7 +1,22 @@
 const express  = require('express');
 const https    = require('https');
+const crypto   = require('crypto');
+const bcrypt   = require('bcryptjs');
 const { Pool } = require('pg');
 const app = express();
+
+// ===== Required secrets — no insecure fallback, refuse to start without them =====
+const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH;
+const SESSION_SECRET      = process.env.SESSION_SECRET;
+const DEVICE_API_KEY      = process.env.DEVICE_API_KEY || null;
+const DEVICE_KEY_REQUIRED = process.env.DEVICE_KEY_REQUIRED === 'true';
+
+if (!ADMIN_PASSWORD_HASH || !SESSION_SECRET) {
+  console.error('❌ Missing required env vars: ADMIN_PASSWORD_HASH and SESSION_SECRET must both be set. Refusing to start.');
+  process.exit(1);
+}
+
+const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8 ชม.
 
 function buildFlexCard(name, hhmm, device_id, check_type, is_late) {
   const isOut      = check_type === 'OUT';
@@ -54,13 +69,15 @@ async function sendLineFlex(token, to, altText, flexContent) {
   });
 }
 
-app.use(express.json());
+// express.json ต้องเก็บ rawBody ไว้ด้วย — ใช้ตรวจ LINE webhook signature
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   const allowed = [/\.vercel\.app$/, /localhost/, /poolvillapattayaparty\.com$/];
   if (origin && allowed.some(r => r.test(origin))) {
     res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -82,6 +99,87 @@ let sensorClearPending = false;
 
 // Bangkok UTC+7 offset helper
 function toTH(d) { return new Date(new Date(d).getTime() + 7 * 3600 * 1000); }
+
+// ===== Audit log =====
+async function logAudit(action, target, detail, req) {
+  const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || null;
+  try {
+    await pool.query(
+      'INSERT INTO audit_log (action, target, detail, ip) VALUES ($1,$2,$3,$4)',
+      [action, target ? String(target) : null, detail ? JSON.stringify(detail) : null, ip]
+    );
+  } catch (e) {
+    console.error('audit log insert failed:', e.message);
+  }
+}
+
+// ===== Admin session (stateless signed cookie) =====
+function getCookie(req, name) {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    if (part.slice(0, idx).trim() === name) return decodeURIComponent(part.slice(idx + 1).trim());
+  }
+  return null;
+}
+
+function signSession() {
+  const payload = Buffer.from(JSON.stringify({ exp: Date.now() + SESSION_TTL_MS })).toString('base64url');
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+function verifySession(token) {
+  if (!token) return false;
+  const dot = token.lastIndexOf('.');
+  if (dot === -1) return false;
+  const payload = token.slice(0, dot);
+  const sig     = token.slice(dot + 1);
+  const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    return typeof data.exp === 'number' && data.exp > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+function requireAdmin(req, res, next) {
+  if (!verifySession(getCookie(req, 'admin_session'))) return res.status(401).json({ error: 'unauthorized' });
+  next();
+}
+
+// ===== Device key (soft-enforced until DEVICE_KEY_REQUIRED=true) =====
+function requireDeviceKey(req, res, next) {
+  if (!DEVICE_API_KEY) return next(); // ยังไม่ได้ตั้งค่า → ไม่บังคับ
+  const key = req.headers['x-device-key'];
+  if (key === DEVICE_API_KEY) return next();
+  if (DEVICE_KEY_REQUIRED) return res.status(401).json({ error: 'unauthorized' });
+  console.warn(`⚠️  ${req.path} called without a valid X-Device-Key (soft phase — allowed through)`);
+  logAudit('device_key_missing', req.path, {}, req);
+  next();
+}
+
+// ===== Login rate limit (in-memory, per-IP) =====
+const loginAttempts = new Map(); // ip -> { count, resetAt }
+function loginRateLimit(req, res, next) {
+  const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || 'unknown';
+  const now = Date.now();
+  let rec = loginAttempts.get(ip);
+  if (!rec || now > rec.resetAt) {
+    rec = { count: 0, resetAt: now + 15 * 60 * 1000 };
+    loginAttempts.set(ip, rec);
+  }
+  if (rec.count >= 5) return res.status(429).json({ error: 'too_many_attempts' });
+  req._loginIp = ip;
+  req._loginRec = rec;
+  next();
+}
 
 async function initDB() {
   await pool.query(`
@@ -115,6 +213,11 @@ async function initDB() {
   `);
   await pool.query(`ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS check_type VARCHAR(3) DEFAULT 'IN';`);
   await pool.query(`ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS is_late BOOLEAN DEFAULT FALSE;`);
+  // กันสแกนซ้ำแข่งกัน (race) สร้าง IN หรือ OUT ซ้ำในวันเดียวกัน
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS attendance_logs_daily_unique
+    ON attendance_logs (finger_id, check_type, ((check_time + interval '7 hours')::date));
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS system_settings (
@@ -134,8 +237,9 @@ async function initDB() {
   `);
   await pool.query(`
     INSERT INTO system_settings (key, value, label) VALUES
-      ('line_channel_token', '', 'LINE Channel Access Token'),
-      ('line_group_id',      '', 'LINE Group ID')
+      ('line_channel_token',  '', 'LINE Channel Access Token'),
+      ('line_channel_secret', '', 'LINE Channel Secret'),
+      ('line_group_id',       '', 'LINE Group ID')
     ON CONFLICT (key) DO NOTHING;
   `);
 
@@ -152,11 +256,53 @@ async function initDB() {
     );
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id         SERIAL PRIMARY KEY,
+      actor      VARCHAR(50) DEFAULT 'admin',
+      action     VARCHAR(50) NOT NULL,
+      target     VARCHAR(100),
+      detail     JSONB,
+      ip         VARCHAR(45),
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
   console.log('✅ DB ready');
 }
 
+// ===== ADMIN AUTH =====
+app.post('/api/admin/login', loginRateLimit, async (req, res) => {
+  const { password } = req.body || {};
+  const ok = typeof password === 'string' && password.length > 0 && await bcrypt.compare(password, ADMIN_PASSWORD_HASH);
+  if (!ok) {
+    req._loginRec.count++;
+    await logAudit('admin_login_failed', null, {}, req);
+    return res.status(401).json({ error: 'invalid_password' });
+  }
+  loginAttempts.delete(req._loginIp);
+  const token = signSession();
+  res.setHeader('Set-Cookie', `admin_session=${token}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+  await logAudit('admin_login', null, {}, req);
+  res.json({ success: true });
+});
+
+app.post('/api/admin/logout', (req, res) => {
+  res.setHeader('Set-Cookie', 'admin_session=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0');
+  res.json({ success: true });
+});
+
+app.get('/api/admin/session', (req, res) => {
+  res.json({ authenticated: verifySession(getCookie(req, 'admin_session')) });
+});
+
+app.get('/api/audit-log', requireAdmin, async (req, res) => {
+  const result = await pool.query('SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200');
+  res.json(result.rows);
+});
+
 // ESP32 — บันทึกเวลา (time-based IN/OUT)
-app.post('/api/attendance', async (req, res) => {
+app.post('/api/attendance', requireDeviceKey, async (req, res) => {
   const { device_id, finger_id } = req.body;
 
   const user    = await pool.query('SELECT * FROM fp_users WHERE finger_id = $1', [finger_id]);
@@ -213,10 +359,33 @@ app.post('/api/attendance', async (req, res) => {
     }
   }
 
-  await pool.query(
-    'INSERT INTO attendance_logs (device_id, finger_id, name, check_type, is_late) VALUES ($1,$2,$3,$4,$5)',
-    [device_id, finger_id, name, check_type, is_late]
-  );
+  try {
+    await pool.query(
+      'INSERT INTO attendance_logs (device_id, finger_id, name, check_type, is_late) VALUES ($1,$2,$3,$4,$5)',
+      [device_id, finger_id, name, check_type, is_late]
+    );
+  } catch (err) {
+    if (err.code === '23505') {
+      // แข่งกันสแกนซ้ำ — อีก request หนึ่งเพิ่งบันทึกไปก่อนเสี้ยววินาที ให้ตอบสถานะปัจจุบันแทน error
+      const retry = await pool.query(
+        `SELECT check_type, check_time FROM attendance_logs
+         WHERE finger_id = $1 AND (check_time + INTERVAL '7 hours')::date = $2::date
+         ORDER BY check_time ASC`,
+        [finger_id, todayDate]
+      );
+      const dupIN  = retry.rows.find(r => r.check_type === 'IN');
+      const dupOUT = retry.rows.find(r => r.check_type === 'OUT');
+      if (check_type === 'IN' && dupIN) {
+        const th   = toTH(dupIN.check_time);
+        const hhmm = `${String(th.getUTCHours()).padStart(2,'0')}:${String(th.getUTCMinutes()).padStart(2,'0')}`;
+        return res.json({ success: false, status: 'already_in', name, check_time_hhmm: hhmm });
+      }
+      if (check_type === 'OUT' && dupOUT) {
+        return res.json({ success: false, status: 'already_out', name });
+      }
+    }
+    throw err;
+  }
 
   // LINE Messaging API
   const [tokenRow, groupRow] = await Promise.all([
@@ -236,14 +405,14 @@ app.post('/api/attendance', async (req, res) => {
   res.json({ success: true, status: 'ok', name, finger_id, check_type, is_late });
 });
 
-// ESP32 — Next ID
-app.get('/api/next-finger-id', async (req, res) => {
+// WEB — Next ID (ไม่ได้ถูกเรียกโดย firmware ปัจจุบัน — คุ้มครองแบบ admin)
+app.get('/api/next-finger-id', requireAdmin, async (req, res) => {
   const result = await pool.query('SELECT COALESCE(MAX(finger_id), 0) + 1 as next_id FROM fp_users');
   res.json({ next_id: result.rows[0].next_id });
 });
 
 // ESP32 — poll enroll (clears queue)
-app.get('/api/enroll-pending', (req, res) => {
+app.get('/api/enroll-pending', requireDeviceKey, (req, res) => {
   if (enrollQueue !== null) {
     const id = enrollQueue;
     enrollQueue = null;
@@ -255,7 +424,7 @@ app.get('/api/enroll-pending', (req, res) => {
 });
 
 // ESP32 — enroll complete
-app.post('/api/enroll-complete', async (req, res) => {
+app.post('/api/enroll-complete', requireDeviceKey, async (req, res) => {
   const { finger_id, confidence, fp_pattern } = req.body;
   await pool.query(
     'UPDATE fp_users SET confidence=$2, fp_pattern=$3, enrolled=TRUE WHERE finger_id=$1',
@@ -266,20 +435,21 @@ app.post('/api/enroll-complete', async (req, res) => {
 });
 
 // WEB — request enroll
-app.post('/api/enroll-request', (req, res) => {
+app.post('/api/enroll-request', requireAdmin, async (req, res) => {
   const { finger_id } = req.body;
   enrollQueue = finger_id;
   enrollPickedUp = false;
+  await logAudit('enroll_request', finger_id, {}, req);
   res.json({ success: true, finger_id });
 });
 
 // WEB — watch enroll (safe, no queue change)
-app.get('/api/enroll-watch', (req, res) => {
+app.get('/api/enroll-watch', requireAdmin, (req, res) => {
   res.json({ queued: enrollQueue !== null, picked_up: enrollPickedUp });
 });
 
 // ESP32 — poll sensor clear
-app.get('/api/sensor-clear-pending', (req, res) => {
+app.get('/api/sensor-clear-pending', requireDeviceKey, (req, res) => {
   if (sensorClearPending) {
     sensorClearPending = false;
     res.json({ pending: true });
@@ -289,26 +459,27 @@ app.get('/api/sensor-clear-pending', (req, res) => {
 });
 
 // WEB — request sensor clear
-app.post('/api/sensor-clear-request', (req, res) => {
+app.post('/api/sensor-clear-request', requireAdmin, async (req, res) => {
   sensorClearPending = true;
+  await logAudit('sensor_clear_request', null, {}, req);
   res.json({ success: true });
 });
 
 // ADMIN — reset all data
-app.delete('/api/admin/reset', async (req, res) => {
-  if (req.body.key !== 'reset-confirm') return res.status(403).json({ error: 'Forbidden' });
+app.delete('/api/admin/reset', requireAdmin, async (req, res) => {
   await pool.query('TRUNCATE attendance_logs, fp_users, monthly_commissions RESTART IDENTITY');
+  await logAudit('admin_reset', null, {}, req);
   res.json({ success: true });
 });
 
 // WEB — list users
-app.get('/api/users', async (req, res) => {
+app.get('/api/users', requireAdmin, async (req, res) => {
   const result = await pool.query('SELECT * FROM fp_users ORDER BY finger_id');
   res.json(result.rows);
 });
 
 // WEB — upsert user (with payroll settings)
-app.post('/api/users', async (req, res) => {
+app.post('/api/users', requireAdmin, async (req, res) => {
   const { finger_id, name, employee_id, department,
           base_salary, attendance_bonus, work_start_time, late_grace_minutes, checkout_start_time } = req.body;
   await pool.query(`
@@ -324,17 +495,19 @@ app.post('/api/users', async (req, res) => {
       base_salary || 0, attendance_bonus || 0,
       work_start_time || '08:00', late_grace_minutes || 15,
       checkout_start_time || '17:00']);
+  await logAudit('user_upsert', finger_id, { name, employee_id, department }, req);
   res.json({ success: true });
 });
 
 // WEB — delete user
-app.delete('/api/users/:finger_id', async (req, res) => {
+app.delete('/api/users/:finger_id', requireAdmin, async (req, res) => {
   await pool.query('DELETE FROM fp_users WHERE finger_id = $1', [req.params.finger_id]);
+  await logAudit('user_delete', req.params.finger_id, {}, req);
   res.json({ success: true });
 });
 
 // WEB — logs (include check_type)
-app.get('/api/logs', async (req, res) => {
+app.get('/api/logs', requireAdmin, async (req, res) => {
   const result = await pool.query(`
     SELECT id, device_id, finger_id, name, check_time, check_type, is_late
     FROM attendance_logs ORDER BY check_time DESC LIMIT 100
@@ -343,7 +516,7 @@ app.get('/api/logs', async (req, res) => {
 });
 
 // WEB — stats
-app.get('/api/stats', async (req, res) => {
+app.get('/api/stats', requireAdmin, async (req, res) => {
   const today = await pool.query(`
     SELECT COUNT(DISTINCT finger_id) as count FROM attendance_logs
     WHERE check_time::date = CURRENT_DATE AND name != 'Unknown'
@@ -358,7 +531,7 @@ app.get('/api/stats', async (req, res) => {
 });
 
 // WEB — monthly payroll report
-app.get('/api/report', async (req, res) => {
+app.get('/api/report', requireAdmin, async (req, res) => {
   const year  = parseInt(req.query.year)  || new Date().getFullYear();
   const month = parseInt(req.query.month) || (new Date().getMonth() + 1);
 
@@ -446,7 +619,7 @@ app.get('/api/report', async (req, res) => {
 });
 
 // WEB — upsert monthly commission
-app.post('/api/commission', async (req, res) => {
+app.post('/api/commission', requireAdmin, async (req, res) => {
   const { finger_id, year, month, commission_amount, notes } = req.body;
   await pool.query(`
     INSERT INTO monthly_commissions (finger_id, year, month, commission_amount, notes)
@@ -454,11 +627,23 @@ app.post('/api/commission', async (req, res) => {
     ON CONFLICT (finger_id, year, month)
     DO UPDATE SET commission_amount=$4, notes=$5
   `, [finger_id, year, month, commission_amount || 0, notes || '']);
+  await logAudit('commission_update', finger_id, { year, month, commission_amount }, req);
   res.json({ success: true });
 });
 
-// LINE Webhook — auto-capture Group ID เมื่อบอทอยู่ในกลุ่ม
+// LINE Webhook — auto-capture Group ID เมื่อบอทอยู่ในกลุ่ม (ตรวจ signature ก่อนเชื่อ body)
 app.post('/api/line-webhook', async (req, res) => {
+  const secretRow = await pool.query(`SELECT value FROM system_settings WHERE key='line_channel_secret'`);
+  const secret    = secretRow.rows[0]?.value;
+  const signature = req.headers['x-line-signature'];
+
+  if (!secret || !signature || !req.rawBody) return res.sendStatus(401);
+
+  const expected = crypto.createHmac('sha256', secret).update(req.rawBody).digest('base64');
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.sendStatus(401);
+
   res.sendStatus(200); // ต้องตอบ 200 ทันที ไม่งั้น LINE retry
   const events = req.body?.events || [];
   for (const event of events) {
@@ -475,7 +660,7 @@ app.post('/api/line-webhook', async (req, res) => {
 });
 
 // WEB — อ่าน settings
-app.get('/api/settings', async (req, res) => {
+app.get('/api/settings', requireAdmin, async (req, res) => {
   const result = await pool.query('SELECT key, value, label FROM system_settings ORDER BY key');
   const out = {};
   result.rows.forEach(r => { out[r.key] = { value: r.value, label: r.label }; });
@@ -483,16 +668,18 @@ app.get('/api/settings', async (req, res) => {
 });
 
 // WEB — บันทึก settings
-app.post('/api/settings', async (req, res) => {
+app.post('/api/settings', requireAdmin, async (req, res) => {
   const updates = req.body;
   for (const [key, value] of Object.entries(updates)) {
     await pool.query('UPDATE system_settings SET value=$2 WHERE key=$1', [key, String(value)]);
   }
+  // ไม่ log ค่า token/secret จริงลง audit — เก็บแค่ชื่อ key ที่ถูกแก้
+  await logAudit('settings_update', null, { keys: Object.keys(updates) }, req);
   res.json({ success: true });
 });
 
 // WEB — อุปกรณ์ที่สแกนมาแล้ว
-app.get('/api/devices', async (req, res) => {
+app.get('/api/devices', requireAdmin, async (req, res) => {
   const result = await pool.query(`
     SELECT device_id,
            COUNT(*)         AS scan_count,
@@ -506,7 +693,7 @@ app.get('/api/devices', async (req, res) => {
 });
 
 // WEB — สรุประบบ
-app.get('/api/system-info', async (req, res) => {
+app.get('/api/system-info', requireAdmin, async (req, res) => {
   const [users, logs, devs] = await Promise.all([
     pool.query('SELECT COUNT(*) as count FROM fp_users'),
     pool.query('SELECT COUNT(*) as count FROM attendance_logs'),

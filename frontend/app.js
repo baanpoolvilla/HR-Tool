@@ -1,5 +1,60 @@
 const API_BASE = 'https://attendance.poolvillapattayaparty.com';
 
+// ===== Auth =====
+async function api(path, opts = {}) {
+  const res = await fetch(API_BASE + path, { ...opts, credentials: 'include' });
+  if (res.status === 401) {
+    showLogin();
+    throw new Error('unauthorized');
+  }
+  return res;
+}
+
+async function checkSession() {
+  try {
+    const res  = await fetch(API_BASE + '/api/admin/session', { credentials: 'include' });
+    const data = await res.json();
+    if (data.authenticated) { showApp(); return; }
+  } catch (e) {}
+  showLogin();
+}
+
+function showLogin() {
+  document.getElementById('login-screen').classList.remove('hidden');
+  document.getElementById('app-shell').classList.add('hidden');
+}
+
+function showApp() {
+  document.getElementById('login-screen').classList.add('hidden');
+  document.getElementById('app-shell').classList.remove('hidden');
+  loadLogs();
+}
+
+async function login() {
+  const password = document.getElementById('login-password').value;
+  const statusEl = document.getElementById('login-status');
+  statusEl.textContent = '';
+  const res = await fetch(API_BASE + '/api/admin/login', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  if (res.ok) {
+    document.getElementById('login-password').value = '';
+    showApp();
+  } else if (res.status === 429) {
+    statusEl.textContent = '⏳ ลองผิดหลายครั้งเกินไป กรุณารอสักครู่แล้วลองใหม่';
+  } else {
+    statusEl.textContent = '❌ รหัสผ่านไม่ถูกต้อง';
+  }
+}
+
+async function logout() {
+  await fetch(API_BASE + '/api/admin/logout', { method: 'POST', credentials: 'include' });
+  showLogin();
+}
+
 // ===== Fingerprint canvas =====
 function drawFingerprint(canvas, seed, enrolled) {
   const ctx = canvas.getContext('2d');
@@ -64,8 +119,8 @@ function fmtMoney(n) {
 // ===== Logs =====
 async function loadLogs() {
   const [logsRes, statsRes] = await Promise.all([
-    fetch(API_BASE + '/api/logs'),
-    fetch(API_BASE + '/api/stats'),
+    api('/api/logs'),
+    api('/api/stats'),
   ]);
   const logs  = await logsRes.json();
   const stats = await statsRes.json();
@@ -104,7 +159,7 @@ async function loadLogs() {
 
 // ===== Users =====
 async function loadUsers() {
-  const res   = await fetch(API_BASE + '/api/users');
+  const res   = await api('/api/users');
   const users = await res.json();
   const tbody = document.getElementById('users-body');
 
@@ -177,7 +232,7 @@ async function startEnroll(fingerId, name) {
   document.getElementById('fp-canvas').style.display = 'none';
   document.getElementById('enroll-modal').classList.add('show');
 
-  await fetch(API_BASE + '/api/enroll-request', {
+  await api('/api/enroll-request', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ finger_id: fingerId }),
@@ -199,7 +254,7 @@ async function startEnroll(fingerId, name) {
     }
 
     if (phase === 'waiting') {
-      const watch = await fetch(API_BASE + '/api/enroll-watch').then(r => r.json());
+      const watch = await api('/api/enroll-watch').then(r => r.json());
       if (watch.picked_up || !watch.queued) {
         phase = 'enrolling';
         document.getElementById('enroll-step').textContent  = 'ขั้นตอนที่ 1/2';
@@ -208,7 +263,7 @@ async function startEnroll(fingerId, name) {
         document.getElementById('modal-status').textContent = `⏳ รอ ESP32 รับคำสั่ง... (${elapsed}s)`;
       }
     } else {
-      const users = await fetch(API_BASE + '/api/users').then(r => r.json());
+      const users = await api('/api/users').then(r => r.json());
       const user  = users.find(u => u.finger_id === fingerId);
       document.getElementById('modal-status').textContent = `👆 กำลังแสกนนิ้ว... (${elapsed}s)`;
       if (user && (user.enrolled || user.confidence > 0)) {
@@ -268,7 +323,7 @@ async function saveUser() {
     return;
   }
 
-  const res = await fetch(API_BASE + '/api/users', {
+  const res = await api('/api/users', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ finger_id: parseInt(finger_id), name, employee_id, department,
@@ -291,14 +346,14 @@ async function saveUser() {
 
 async function deleteUser(fid) {
   if (!confirm(`ลบ Finger ID ${fid} ใช่ไหม?`)) return;
-  await fetch(API_BASE + '/api/users/' + fid, { method: 'DELETE' });
+  await api('/api/users/' + fid, { method: 'DELETE' });
   loadUsers();
 }
 
 // ===== Clear Sensor =====
 async function clearSensor() {
   if (!confirm('🗑️ ล้างลายนิ้วมือทั้งหมดในเครื่องสแกน?\nต้องวาง ESP32 ให้ออนไลน์ก่อน')) return;
-  await fetch(API_BASE + '/api/sensor-clear-request', { method: 'POST' });
+  await api('/api/sensor-clear-request', { method: 'POST' });
   alert('✅ ส่งคำสั่งแล้ว — รอ ESP32 รับคำสั่ง (ภายใน 3 วินาที)\nจอเครื่องจะขึ้น "SENSOR CLEARED"');
 }
 
@@ -306,11 +361,7 @@ async function clearSensor() {
 async function resetAllData() {
   if (!confirm('⚠️ ลบข้อมูลทั้งหมด? (พนักงาน + บันทึกเวลา)\nไม่สามารถย้อนกลับได้!')) return;
   if (!confirm('ยืนยันอีกครั้ง — ลบจริงๆ ใช่ไหม?')) return;
-  const res = await fetch(API_BASE + '/api/admin/reset', {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key: 'reset-confirm' }),
-  });
+  const res = await api('/api/admin/reset', { method: 'DELETE' });
   if (res.ok) {
     alert('✅ ล้างข้อมูลเรียบร้อยแล้ว');
     loadLogs();
@@ -321,14 +372,15 @@ async function resetAllData() {
 // ===== Config / Settings =====
 async function loadSettings() {
   try {
-    const res = await fetch(API_BASE + '/api/settings');
+    const res = await api('/api/settings');
     const s   = await res.json();
     document.getElementById('cfg-work-start').value  = s.default_work_start?.value || '08:00';
     document.getElementById('cfg-checkout').value    = s.default_checkout?.value   || '17:00';
     document.getElementById('cfg-grace').value       = s.default_grace?.value      || '15';
     document.getElementById('cfg-salary').value      = s.default_salary?.value     || '0';
     document.getElementById('cfg-bonus').value       = s.default_bonus?.value      || '0';
-    document.getElementById('cfg-line-token').value = s.line_channel_token?.value || '';
+    document.getElementById('cfg-line-token').value  = s.line_channel_token?.value  || '';
+    document.getElementById('cfg-line-secret').value = s.line_channel_secret?.value || '';
     const gid = s.line_group_id?.value || '';
     document.getElementById('cfg-line-user').value = gid;
     document.getElementById('group-id-badge').textContent = gid ? '✅ Captured' : '';
@@ -337,15 +389,16 @@ async function loadSettings() {
 
 async function saveSettings() {
   const updates = {
-    default_work_start: document.getElementById('cfg-work-start').value,
-    default_checkout:   document.getElementById('cfg-checkout').value,
-    default_grace:      document.getElementById('cfg-grace').value,
-    default_salary:     document.getElementById('cfg-salary').value,
-    default_bonus:      document.getElementById('cfg-bonus').value,
-    line_channel_token: document.getElementById('cfg-line-token').value,
-    line_group_id:      document.getElementById('cfg-line-user').value,
+    default_work_start:  document.getElementById('cfg-work-start').value,
+    default_checkout:    document.getElementById('cfg-checkout').value,
+    default_grace:       document.getElementById('cfg-grace').value,
+    default_salary:      document.getElementById('cfg-salary').value,
+    default_bonus:       document.getElementById('cfg-bonus').value,
+    line_channel_token:  document.getElementById('cfg-line-token').value,
+    line_channel_secret: document.getElementById('cfg-line-secret').value,
+    line_group_id:       document.getElementById('cfg-line-user').value,
   };
-  const res    = await fetch(API_BASE + '/api/settings', {
+  const res    = await api('/api/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updates),
@@ -364,7 +417,7 @@ async function saveSettings() {
 async function applyDefaultsToForm() {
   if (document.getElementById('f-finger-id').value) return; // กำลัง edit อยู่
   try {
-    const res = await fetch(API_BASE + '/api/settings');
+    const res = await api('/api/settings');
     const s   = await res.json();
     document.getElementById('f-start-time').value    = s.default_work_start?.value || '08:00';
     document.getElementById('f-checkout-time').value = s.default_checkout?.value   || '17:00';
@@ -375,7 +428,7 @@ async function applyDefaultsToForm() {
 }
 
 async function loadDevices() {
-  const res   = await fetch(API_BASE + '/api/devices');
+  const res   = await api('/api/devices');
   const devs  = await res.json();
   const tbody = document.getElementById('devices-body');
   if (!devs.length) {
@@ -393,7 +446,7 @@ async function loadDevices() {
 
 async function loadSystemInfo() {
   try {
-    const res  = await fetch(API_BASE + '/api/system-info');
+    const res  = await api('/api/system-info');
     const info = await res.json();
     const thTime = new Date(info.server_time).toLocaleString('th-TH');
     document.getElementById('system-info').innerHTML = [
@@ -419,7 +472,7 @@ async function loadReport() {
   document.getElementById('report-body').innerHTML =
     '<tr><td colspan="8" style="text-align:center;color:#999;padding:20px">กำลังโหลด...</td></tr>';
 
-  const res  = await fetch(API_BASE + `/api/report?year=${year}&month=${month}`);
+  const res  = await api(`/api/report?year=${year}&month=${month}`);
   const data = await res.json();
   currentReportData = data;
   renderReport(data);
@@ -515,7 +568,7 @@ async function saveCommission() {
   const amount = parseFloat(document.getElementById('comm-amount').value) || 0;
   const notes  = document.getElementById('comm-notes').value;
 
-  await fetch(API_BASE + '/api/commission', {
+  await api('/api/commission', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ finger_id: editingCommFid, year, month, commission_amount: amount, notes }),
@@ -567,7 +620,8 @@ function showDaily(fingerId) {
 document.getElementById('r-month').value = new Date().getMonth() + 1;
 document.getElementById('r-year').value  = new Date().getFullYear();
 
-loadLogs();
+checkSession();
 setInterval(() => {
-  if (!document.getElementById('tab-logs').classList.contains('hidden')) loadLogs();
+  const shellVisible = !document.getElementById('app-shell').classList.contains('hidden');
+  if (shellVisible && !document.getElementById('tab-logs').classList.contains('hidden')) loadLogs();
 }, 10000);
