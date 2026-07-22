@@ -153,44 +153,10 @@
     <!-- ===== USERS ===== -->
     <div id="tab-users" class="content hidden">
       <div class="card">
-        <h2>➕ เพิ่ม / แก้ไข พนักงาน</h2>
-        <div id="user-status" class="status"></div>
-        <div class="form-row">
-          <div class="form-group" style="max-width:100px"><label>Finger ID *</label><input type="number" id="f-finger-id" placeholder="1" min="1" max="127"></div>
-          <div class="form-group"><label>ชื่อ-นามสกุล *</label><input type="text" id="f-name" placeholder="สมชาย ใจดี"></div>
-          <div class="form-group" style="max-width:140px"><label>รหัสพนักงาน</label><input type="text" id="f-emp-id" placeholder="EMP001"></div>
-          <div class="form-group" style="max-width:150px"><label>แผนก</label><input type="text" id="f-dept" placeholder="แผนกบริการ"></div>
-        </div>
-        <div class="form-row">
-          <div class="form-group" style="max-width:180px"><label>กะ (ถ้าใช้กะ จะใช้เวลากะแทน)</label>
-            <select id="f-shift" onchange="onShiftChange()"><option value="">— ไม่ใช้กะ —</option></select>
-          </div>
-          <div class="form-group" style="max-width:140px"><label>ฐานเดือน (บาท)</label><input type="number" id="f-salary" placeholder="0" min="0" step="100"></div>
-          <div class="form-group" style="max-width:140px"><label>เบี้ยขยัน (บาท)</label><input type="number" id="f-bonus" placeholder="0" min="0" step="100"></div>
-          <div class="form-group" style="max-width:130px"><label>เวลาเข้างาน</label><input type="time" id="f-start-time" value="08:00"></div>
-          <div class="form-group" style="max-width:130px"><label>ผ่อนผัน (นาที)</label><input type="number" id="f-grace" placeholder="15" min="0" max="120"></div>
-          <div class="form-group" style="max-width:130px"><label>OUT หลังเวลา</label><input type="time" id="f-checkout-time" value="17:00"></div>
-          <div class="form-group" style="max-width:150px"><label>ประกันสังคม</label>
-            <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text);padding-top:6px">
-              <input type="checkbox" id="f-sso" style="width:auto"> หัก 5%
-            </label>
-          </div>
-          <div class="form-group" style="max-width:130px"><label>กองทุนฯ (% ต่อเดือน)</label><input type="number" id="f-pf" value="0" min="0" max="30" step="0.5"></div>
-          <div class="form-group" style="max-width:140px"><label>ภาษีเงินได้</label>
-            <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text);padding-top:6px">
-              <input type="checkbox" id="f-tax" style="width:auto"> คิดภาษี
-            </label>
-          </div>
-          <div class="form-group" style="max-width:110px;justify-content:flex-end"><label>&nbsp;</label><button class="btn btn-success" style="justify-content:center" onclick="saveUser()">💾 บันทึก</button></div>
-        </div>
-        <div style="background:var(--warning-soft);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--warning)">
-          ⚠️ การคิดภาษีเป็นการ<strong>ประมาณการ</strong>ตามอัตราขั้นบันได (ยังไม่รวมลดหย่อนคู่สมรส/บุตร/ประกัน) — ก่อนใช้จริงควรให้ฝ่ายบัญชีตรวจสอบ
-        </div>
-      </div>
-      <div class="card">
         <div class="card-head">
           <h2>👥 รายชื่อพนักงาน</h2>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-success" onclick="openAddEmp()">➕ เพิ่มพนักงาน</button>
             <button class="btn btn-primary" onclick="loadUsers()">🔄 รีเฟรช</button>
             <button class="btn btn-warning" onclick="clearSensor()">🖐️ ล้างนิ้วในเครื่อง</button>
             <button class="btn btn-danger" onclick="resetAllData()">🗑️ ล้างข้อมูลทั้งหมด</button>
@@ -289,25 +255,14 @@
     <!-- ===== SHIFTS ===== -->
     <div id="tab-shifts" class="content hidden">
       <div class="card">
-        <h2 id="shift-form-title">➕ เพิ่มกะทำงาน</h2>
-        <p class="muted" style="font-size:13px;margin-bottom:12px">กำหนดกะแล้วนำไปผูกกับพนักงานในหน้า "พนักงาน" — พนักงานที่ผูกกะจะใช้เวลากะนี้คิดเข้า-ออกงาน</p>
-        <div id="shift-status" class="status"></div>
-        <input type="hidden" id="s-id">
-        <div class="form-row">
-          <div class="form-group"><label>ชื่อกะ *</label><input type="text" id="s-name" placeholder="เช่น กะเช้า, กะบ่าย"></div>
-          <div class="form-group" style="max-width:130px"><label>เวลาเข้า *</label><input type="time" id="s-start" value="08:00"></div>
-          <div class="form-group" style="max-width:130px"><label>เวลาออก *</label><input type="time" id="s-end" value="17:00"></div>
-          <div class="form-group" style="max-width:140px"><label>พักเบรก (นาที)</label><input type="number" id="s-break" value="0" min="0" step="15"></div>
-          <div class="form-group" style="max-width:180px;justify-content:flex-end"><label>&nbsp;</label>
-            <div style="display:flex;gap:8px">
-              <button class="btn btn-success" style="justify-content:center;flex:1" onclick="saveShift()">💾 บันทึก</button>
-              <button class="btn btn-ghost" onclick="resetShiftForm()">ล้าง</button>
-            </div>
+        <div class="card-head">
+          <h2>📅 รายการกะ</h2>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-success" onclick="openAddShift()">➕ เพิ่มกะ</button>
+            <button class="btn btn-primary" onclick="loadShifts()">🔄 รีเฟรช</button>
           </div>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-head"><h2>📅 รายการกะ</h2><button class="btn btn-primary" onclick="loadShifts()">🔄 รีเฟรช</button></div>
+        <p class="muted" style="font-size:13px;margin-bottom:12px">กำหนดกะแล้วนำไปผูกกับพนักงานในหน้า "พนักงาน" — พนักงานที่ผูกกะจะใช้เวลากะนี้คิดเข้า-ออกงาน</p>
         <div class="table-wrap">
           <table>
             <thead><tr><th>ชื่อกะ</th><th>เข้า</th><th>ออก</th><th>พักเบรก</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
@@ -320,22 +275,10 @@
     <!-- ===== HOLIDAYS ===== -->
     <div id="tab-holidays" class="content hidden">
       <div class="card">
-        <h2>➕ เพิ่มวันหยุด</h2>
-        <p class="muted" style="font-size:13px;margin-bottom:12px">วันหยุดบริษัท/นักขัตฤกษ์ — ใช้ประกอบการคิดเงินเดือนในเฟสถัดไป</p>
-        <div id="holiday-status" class="status"></div>
-        <div class="form-row">
-          <div class="form-group" style="max-width:180px"><label>วันที่ *</label><input type="date" id="h-date"></div>
-          <div class="form-group"><label>ชื่อวันหยุด</label><input type="text" id="h-name" placeholder="เช่น วันสงกรานต์"></div>
-          <div class="form-group" style="max-width:150px"><label>ประเภท</label>
-            <select id="h-paid"><option value="true">มีค่าจ้าง</option><option value="false">ไม่มีค่าจ้าง</option></select>
-          </div>
-          <div class="form-group" style="max-width:110px;justify-content:flex-end"><label>&nbsp;</label><button class="btn btn-success" style="justify-content:center" onclick="saveHoliday()">💾 บันทึก</button></div>
-        </div>
-      </div>
-      <div class="card">
         <div class="card-head">
           <h2>🌴 วันหยุดปี <span id="holiday-year-label"></span></h2>
           <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-success" onclick="openAddHoliday()">➕ เพิ่มวันหยุด</button>
             <input type="number" id="h-filter-year" style="width:100px" onchange="loadHolidays()">
             <button class="btn btn-primary" onclick="loadHolidays()">🔄 รีเฟรช</button>
           </div>
@@ -352,21 +295,10 @@
     <!-- ===== LEAVE ===== -->
     <div id="tab-leave" class="content hidden">
       <div class="card">
-        <h2>➕ บันทึกการลา</h2>
-        <div id="leave-status" class="status"></div>
-        <div class="form-row">
-          <div class="form-group"><label>พนักงาน *</label><select id="l-emp"></select></div>
-          <div class="form-group" style="max-width:180px"><label>ประเภท *</label><select id="l-type"></select></div>
-          <div class="form-group" style="max-width:160px"><label>ตั้งแต่ *</label><input type="date" id="l-start"></div>
-          <div class="form-group" style="max-width:160px"><label>ถึง *</label><input type="date" id="l-end"></div>
-          <div class="form-group"><label>เหตุผล</label><input type="text" id="l-reason" placeholder="เช่น ป่วยเป็นไข้"></div>
-          <div class="form-group" style="max-width:110px;justify-content:flex-end"><label>&nbsp;</label><button class="btn btn-success" style="justify-content:center" onclick="saveLeave()">💾 บันทึก</button></div>
-        </div>
-      </div>
-      <div class="card">
         <div class="card-head">
           <h2>📝 รายการลาปี <span id="leave-year-label"></span></h2>
           <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-success" onclick="openAddLeave()">➕ บันทึกการลา</button>
             <input type="number" id="l-filter-year" style="width:100px" onchange="loadLeaveRequests()">
             <button class="btn btn-primary" onclick="loadLeaveRequests()">🔄 รีเฟรช</button>
           </div>
@@ -386,12 +318,9 @@
         </table></div>
       </div>
       <div class="card">
-        <h2>🏷️ ประเภทการลา</h2>
-        <div class="form-row">
-          <div class="form-group"><label>ชื่อประเภท</label><input type="text" id="lt-name" placeholder="เช่น ลาบวช"></div>
-          <div class="form-group" style="max-width:150px"><label>โควตา (วัน/ปี)</label><input type="number" id="lt-quota" value="0" min="0"></div>
-          <div class="form-group" style="max-width:160px"><label>ค่าจ้าง</label><select id="lt-paid"><option value="true">มีค่าจ้าง</option><option value="false">ไม่มีค่าจ้าง</option></select></div>
-          <div class="form-group" style="max-width:110px;justify-content:flex-end"><label>&nbsp;</label><button class="btn btn-success" style="justify-content:center" onclick="saveLeaveType()">➕ เพิ่ม</button></div>
+        <div class="card-head">
+          <h2>🏷️ ประเภทการลา</h2>
+          <button class="btn btn-success" onclick="openAddLtype()">➕ เพิ่มประเภท</button>
         </div>
         <div class="table-wrap"><table>
           <thead><tr><th>ประเภท</th><th>ค่าจ้าง</th><th>โควตา/ปี</th><th>จัดการ</th></tr></thead>
@@ -403,27 +332,16 @@
     <!-- ===== OT ===== -->
     <div id="tab-ot" class="content hidden">
       <div class="card">
-        <h2>➕ บันทึกล่วงเวลา (OT)</h2>
-        <p class="muted" style="font-size:13px;margin-bottom:12px">ค่า OT = (ชั่วโมง × ค่าจ้างต่อชม.) × ตัวคูณ — ค่าจ้างต่อชม.คิดจาก ฐานเดือน ÷ 30 ÷ 8</p>
-        <div id="ot-status" class="status"></div>
-        <div class="form-row">
-          <div class="form-group"><label>พนักงาน *</label><select id="o-emp"></select></div>
-          <div class="form-group" style="max-width:160px"><label>วันที่ *</label><input type="date" id="o-date"></div>
-          <div class="form-group" style="max-width:140px"><label>จำนวน (ชม.) *</label><input type="number" id="o-hours" placeholder="2" min="0" step="0.5"></div>
-          <div class="form-group" style="max-width:130px"><label>ตัวคูณ</label><input type="number" id="o-mult" value="1.5" min="1" step="0.5"></div>
-          <div class="form-group"><label>เหตุผล</label><input type="text" id="o-reason" placeholder="เช่น งานเลี้ยงลูกค้า"></div>
-          <div class="form-group" style="max-width:110px;justify-content:flex-end"><label>&nbsp;</label><button class="btn btn-success" style="justify-content:center" onclick="saveOvertime()">💾 บันทึก</button></div>
-        </div>
-      </div>
-      <div class="card">
         <div class="card-head">
           <h2>⏱️ รายการ OT</h2>
           <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-success" onclick="openAddOt()">➕ บันทึก OT</button>
             <select id="o-filter-month"></select>
             <input type="number" id="o-filter-year" style="width:100px" onchange="loadOvertime()">
             <button class="btn btn-primary" onclick="loadOvertime()">🔄 รีเฟรช</button>
           </div>
         </div>
+        <p class="muted" style="font-size:13px;margin-bottom:0">ค่า OT = (ชั่วโมง × ค่าจ้างต่อชม.) × ตัวคูณ — ค่าจ้างต่อชม.คิดจาก ฐานเดือน ÷ 30 ÷ 8</p>
         <div class="table-wrap">
           <table>
             <thead><tr><th>พนักงาน</th><th>วันที่</th><th>ชั่วโมง</th><th>ตัวคูณ</th><th>เหตุผล</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
@@ -465,6 +383,130 @@
 </div>
 
 <!-- ================= MODALS ================= -->
+<!-- Employee add/edit -->
+<div class="modal-bg" id="emp-modal">
+  <div class="modal modal-form" style="max-width:560px;width:96%">
+    <h3 id="emp-modal-title" style="text-align:center">เพิ่มพนักงาน</h3>
+    <div id="user-status" class="status"></div>
+    <div class="form-row">
+      <div class="form-group" style="max-width:120px"><label>Finger ID *</label><input type="number" id="f-finger-id" placeholder="1" min="1" max="127"></div>
+      <div class="form-group"><label>ชื่อ-นามสกุล *</label><input type="text" id="f-name" placeholder="สมชาย ใจดี"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>รหัสพนักงาน</label><input type="text" id="f-emp-id" placeholder="EMP001"></div>
+      <div class="form-group"><label>แผนก</label><input type="text" id="f-dept" placeholder="แผนกบริการ"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>กะ (ใช้เวลากะแทน)</label><select id="f-shift" onchange="onShiftChange()"><option value="">— ไม่ใช้กะ —</option></select></div>
+      <div class="form-group" style="max-width:120px"><label>เวลาเข้างาน</label><input type="time" id="f-start-time" value="08:00"></div>
+      <div class="form-group" style="max-width:120px"><label>OUT หลังเวลา</label><input type="time" id="f-checkout-time" value="17:00"></div>
+      <div class="form-group" style="max-width:110px"><label>ผ่อนผัน (นาที)</label><input type="number" id="f-grace" placeholder="15" min="0" max="120"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>ฐานเดือน (บาท)</label><input type="number" id="f-salary" placeholder="0" min="0" step="100"></div>
+      <div class="form-group"><label>เบี้ยขยัน (บาท)</label><input type="number" id="f-bonus" placeholder="0" min="0" step="100"></div>
+      <div class="form-group" style="max-width:120px"><label>กองทุนฯ %</label><input type="number" id="f-pf" value="0" min="0" max="30" step="0.5"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>ประกันสังคม</label><label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text);padding-top:6px"><input type="checkbox" id="f-sso" style="width:auto"> หัก 5%</label></div>
+      <div class="form-group"><label>ภาษีเงินได้</label><label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text);padding-top:6px"><input type="checkbox" id="f-tax" style="width:auto"> คิดภาษี</label></div>
+    </div>
+    <div style="background:var(--warning-soft);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--warning)">⚠️ การคิดภาษีเป็นการ<strong>ประมาณการ</strong> — ก่อนใช้จริงควรให้ฝ่ายบัญชีตรวจสอบ</div>
+    <div class="modal-actions">
+      <button class="btn btn-success" onclick="saveUser()">💾 บันทึก</button>
+      <button class="btn btn-ghost" onclick="closeModal('emp-modal')">ยกเลิก</button>
+    </div>
+  </div>
+</div>
+
+<!-- Shift add/edit -->
+<div class="modal-bg" id="shift-modal">
+  <div class="modal modal-form" style="max-width:460px">
+    <h3 id="shift-modal-title" style="text-align:center">เพิ่มกะ</h3>
+    <div id="shift-status" class="status"></div>
+    <input type="hidden" id="s-id">
+    <div class="form-group" style="margin-bottom:10px"><label>ชื่อกะ *</label><input type="text" id="s-name" placeholder="เช่น กะเช้า"></div>
+    <div class="form-row">
+      <div class="form-group"><label>เวลาเข้า *</label><input type="time" id="s-start" value="08:00"></div>
+      <div class="form-group"><label>เวลาออก *</label><input type="time" id="s-end" value="17:00"></div>
+      <div class="form-group"><label>พักเบรก (นาที)</label><input type="number" id="s-break" value="0" min="0" step="15"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-success" onclick="saveShift()">💾 บันทึก</button>
+      <button class="btn btn-ghost" onclick="closeModal('shift-modal')">ยกเลิก</button>
+    </div>
+  </div>
+</div>
+
+<!-- Holiday add -->
+<div class="modal-bg" id="holiday-modal">
+  <div class="modal modal-form" style="max-width:420px">
+    <h3 style="text-align:center">เพิ่มวันหยุด</h3>
+    <div id="holiday-status" class="status"></div>
+    <div class="form-group" style="margin-bottom:10px"><label>วันที่ *</label><input type="date" id="h-date"></div>
+    <div class="form-group" style="margin-bottom:10px"><label>ชื่อวันหยุด</label><input type="text" id="h-name" placeholder="เช่น วันสงกรานต์"></div>
+    <div class="form-group"><label>ประเภท</label><select id="h-paid"><option value="true">มีค่าจ้าง</option><option value="false">ไม่มีค่าจ้าง</option></select></div>
+    <div class="modal-actions">
+      <button class="btn btn-success" onclick="saveHoliday()">💾 บันทึก</button>
+      <button class="btn btn-ghost" onclick="closeModal('holiday-modal')">ยกเลิก</button>
+    </div>
+  </div>
+</div>
+
+<!-- Leave add -->
+<div class="modal-bg" id="leave-modal">
+  <div class="modal modal-form" style="max-width:460px">
+    <h3 style="text-align:center">บันทึกการลา</h3>
+    <div id="leave-status" class="status"></div>
+    <div class="form-group" style="margin-bottom:10px"><label>พนักงาน *</label><select id="l-emp"></select></div>
+    <div class="form-group" style="margin-bottom:10px"><label>ประเภท *</label><select id="l-type"></select></div>
+    <div class="form-row">
+      <div class="form-group"><label>ตั้งแต่ *</label><input type="date" id="l-start"></div>
+      <div class="form-group"><label>ถึง *</label><input type="date" id="l-end"></div>
+    </div>
+    <div class="form-group" style="margin-top:10px"><label>เหตุผล</label><input type="text" id="l-reason" placeholder="เช่น ป่วยเป็นไข้"></div>
+    <div class="modal-actions">
+      <button class="btn btn-success" onclick="saveLeave()">💾 บันทึก</button>
+      <button class="btn btn-ghost" onclick="closeModal('leave-modal')">ยกเลิก</button>
+    </div>
+  </div>
+</div>
+
+<!-- Leave type add -->
+<div class="modal-bg" id="ltype-modal">
+  <div class="modal modal-form" style="max-width:420px">
+    <h3 style="text-align:center">เพิ่มประเภทการลา</h3>
+    <div class="form-group" style="margin-bottom:10px"><label>ชื่อประเภท</label><input type="text" id="lt-name" placeholder="เช่น ลาบวช"></div>
+    <div class="form-row">
+      <div class="form-group"><label>โควตา (วัน/ปี)</label><input type="number" id="lt-quota" value="0" min="0"></div>
+      <div class="form-group"><label>ค่าจ้าง</label><select id="lt-paid"><option value="true">มีค่าจ้าง</option><option value="false">ไม่มีค่าจ้าง</option></select></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-success" onclick="saveLeaveType()">➕ เพิ่ม</button>
+      <button class="btn btn-ghost" onclick="closeModal('ltype-modal')">ยกเลิก</button>
+    </div>
+  </div>
+</div>
+
+<!-- OT add -->
+<div class="modal-bg" id="ot-modal">
+  <div class="modal modal-form" style="max-width:460px">
+    <h3 style="text-align:center">บันทึกล่วงเวลา (OT)</h3>
+    <div id="ot-status" class="status"></div>
+    <div class="form-group" style="margin-bottom:10px"><label>พนักงาน *</label><select id="o-emp"></select></div>
+    <div class="form-row">
+      <div class="form-group"><label>วันที่ *</label><input type="date" id="o-date"></div>
+      <div class="form-group"><label>จำนวน (ชม.) *</label><input type="number" id="o-hours" placeholder="2" min="0" step="0.5"></div>
+      <div class="form-group"><label>ตัวคูณ</label><input type="number" id="o-mult" value="1.5" min="1" step="0.5"></div>
+    </div>
+    <div class="form-group" style="margin-top:10px"><label>เหตุผล</label><input type="text" id="o-reason" placeholder="เช่น งานเลี้ยงลูกค้า"></div>
+    <div class="modal-actions">
+      <button class="btn btn-success" onclick="saveOvertime()">💾 บันทึก</button>
+      <button class="btn btn-ghost" onclick="closeModal('ot-modal')">ยกเลิก</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-bg" id="comm-modal">
   <div class="modal" style="max-width:360px">
     <h3 id="comm-modal-title">แก้ไขค่าคอม</h3>

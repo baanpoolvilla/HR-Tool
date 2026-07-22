@@ -345,7 +345,11 @@ input:focus, select:focus, textarea:focus {
   background: var(--surface); color: var(--text);
   border-radius: 18px; padding: 26px; width: 360px; max-width: 100%;
   text-align: center; box-shadow: var(--shadow-lg);
+  max-height: 92vh; overflow-y: auto;
 }
+.modal-form { text-align: left; }
+.modal-actions { display: flex; gap: 8px; margin-top: 18px; }
+.modal-actions .btn { flex: 1; justify-content: center; }
 .modal h3 { font-size: 18px; margin-bottom: 8px; }
 .modal p { color: var(--text-muted); font-size: 14px; margin-bottom: 20px; line-height: 1.6; }
 .modal-fp {

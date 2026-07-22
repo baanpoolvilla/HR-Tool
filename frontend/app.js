@@ -78,7 +78,7 @@ function showPage(page, el) {
   closeSidebar();
   if (page === 'dashboard') loadDashboard();
   if (page === 'logs')   loadLogs();
-  if (page === 'users')  { populateShiftDropdown(); loadUsers(); applyDefaultsToForm(); }
+  if (page === 'users')  { populateShiftDropdown(); loadUsers(); }
   if (page === 'report') {}
   if (page === 'config') { loadSettings(); loadDevices(); loadSystemInfo(); }
   if (page === 'shifts') loadShifts();
@@ -127,6 +127,10 @@ function fillMonthSelect(id) {
 
 function openSidebar()  { document.getElementById('sidebar').classList.add('open');  document.getElementById('scrim').classList.add('show'); }
 function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); document.getElementById('scrim').classList.remove('show'); }
+
+// ===== Modal helpers =====
+function openModal(id)  { document.getElementById(id).classList.add('show'); }
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
 
 // ===== Theme =====
 function currentTheme() {
@@ -421,7 +425,24 @@ function cancelEnroll() {
 }
 
 // ===== Save / Edit / Delete =====
+async function openAddEmp() {
+  document.getElementById('emp-modal-title').textContent = '➕ เพิ่มพนักงาน';
+  ['f-finger-id','f-name','f-emp-id','f-dept','f-salary','f-bonus','f-grace','f-pf'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+  document.getElementById('f-shift').value = '';
+  document.getElementById('f-sso').checked = false;
+  document.getElementById('f-tax').checked = false;
+  document.getElementById('f-finger-id').readOnly = false;
+  document.getElementById('user-status').className = 'status';
+  await populateShiftDropdown();
+  await applyDefaultsToForm(true);   // เติมค่าเริ่มต้น (เวลา/ผ่อนผัน) จาก settings
+  onShiftChange();
+  openModal('emp-modal');
+}
+
 function editUser(fid, name, empId, dept, salary, bonus, startTime, grace, checkoutTime, shiftId, ssoEnabled, pfPercent, taxEnabled) {
+  document.getElementById('emp-modal-title').textContent = '✏️ แก้ไขพนักงาน';
   document.getElementById('f-finger-id').value     = fid;
   document.getElementById('f-name').value           = name;
   document.getElementById('f-emp-id').value         = empId;
@@ -435,8 +456,10 @@ function editUser(fid, name, empId, dept, salary, bonus, startTime, grace, check
   document.getElementById('f-sso').checked          = ssoEnabled === true;
   document.getElementById('f-pf').value             = pfPercent    || 0;
   document.getElementById('f-tax').checked          = taxEnabled === true;
+  document.getElementById('f-finger-id').readOnly   = true;   // ห้ามแก้ Finger ID ตอนแก้ไข
+  document.getElementById('user-status').className  = 'status';
   onShiftChange();
-  window.scrollTo(0, 0);
+  openModal('emp-modal');
 }
 
 async function saveUser() {
@@ -470,21 +493,13 @@ async function saveUser() {
   });
 
   if (res.ok) {
-    status.className = 'status success';
-    status.textContent = '✅ บันทึกเรียบร้อย';
-    ['f-finger-id','f-name','f-emp-id','f-dept','f-salary','f-bonus','f-grace'].forEach(id => {
-      document.getElementById(id).value = '';
-    });
-    document.getElementById('f-start-time').value    = '08:00';
-    document.getElementById('f-checkout-time').value = '17:00';
-    document.getElementById('f-shift').value = '';
-    document.getElementById('f-sso').checked = false;
-    document.getElementById('f-pf').value = '0';
-    document.getElementById('f-tax').checked = false;
-    onShiftChange();
+    closeModal('emp-modal');
     loadUsers();
+  } else {
+    status.className = 'status error';
+    status.textContent = '❌ บันทึกไม่สำเร็จ';
+    setTimeout(() => { status.className = 'status'; }, 3000);
   }
-  setTimeout(() => { status.className = 'status'; }, 3000);
 }
 
 async function deleteUser(fid) {
@@ -629,6 +644,12 @@ async function loadShifts() {
     </tr>`).join('');
 }
 
+function openAddShift() {
+  resetShiftForm();
+  document.getElementById('shift-status').className = 'status';
+  openModal('shift-modal');
+}
+
 function editShift(id) {
   const s = shiftsCache.find(x => x.id === id);
   if (!s) return;
@@ -637,8 +658,9 @@ function editShift(id) {
   document.getElementById('s-start').value = s.start_time;
   document.getElementById('s-end').value   = s.end_time;
   document.getElementById('s-break').value = s.break_minutes;
-  document.getElementById('shift-form-title').textContent = '✏️ แก้ไขกะ';
-  window.scrollTo(0, 0);
+  document.getElementById('shift-modal-title').textContent = '✏️ แก้ไขกะ';
+  document.getElementById('shift-status').className = 'status';
+  openModal('shift-modal');
 }
 
 function resetShiftForm() {
@@ -647,7 +669,7 @@ function resetShiftForm() {
   document.getElementById('s-start').value = '08:00';
   document.getElementById('s-end').value   = '17:00';
   document.getElementById('s-break').value = '0';
-  document.getElementById('shift-form-title').textContent = '➕ เพิ่มกะทำงาน';
+  document.getElementById('shift-modal-title').textContent = '➕ เพิ่มกะ';
 }
 
 async function saveShift() {
@@ -667,10 +689,11 @@ async function saveShift() {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   });
   if (res.ok) {
-    status.className = 'status success'; status.textContent = '✅ บันทึกกะแล้ว';
-    resetShiftForm(); loadShifts();
+    closeModal('shift-modal'); loadShifts();
+  } else {
+    status.className = 'status error'; status.textContent = '❌ บันทึกไม่สำเร็จ';
+    setTimeout(() => { status.className = 'status'; }, 3000);
   }
-  setTimeout(() => { status.className = 'status'; }, 3000);
 }
 
 async function deleteShift(id, name) {
@@ -730,6 +753,14 @@ async function loadHolidays() {
   }).join('');
 }
 
+function openAddHoliday() {
+  document.getElementById('h-date').value = '';
+  document.getElementById('h-name').value = '';
+  document.getElementById('h-paid').value = 'true';
+  document.getElementById('holiday-status').className = 'status';
+  openModal('holiday-modal');
+}
+
 async function saveHoliday() {
   const status = document.getElementById('holiday-status');
   const holiday_date = document.getElementById('h-date').value;
@@ -746,12 +777,13 @@ async function saveHoliday() {
     }),
   });
   if (res.ok) {
-    status.className = 'status success'; status.textContent = '✅ บันทึกวันหยุดแล้ว';
-    document.getElementById('h-name').value = '';
     document.getElementById('h-filter-year').value = new Date(holiday_date).getFullYear();
+    closeModal('holiday-modal');
     loadHolidays();
+  } else {
+    status.className = 'status error'; status.textContent = '❌ บันทึกไม่สำเร็จ';
+    setTimeout(() => { status.className = 'status'; }, 3000);
   }
-  setTimeout(() => { status.className = 'status'; }, 3000);
 }
 
 async function deleteHoliday(id) {
@@ -780,6 +812,16 @@ async function loadLeaveTypesDropdown() {
     .map(t => `<option value="${t.id}">${t.name}${t.is_paid ? '' : ' (ไม่รับค่าจ้าง)'}</option>`).join('');
 }
 
+async function openAddLeave() {
+  await populateEmployeeSelect('l-emp');
+  await loadLeaveTypesDropdown();
+  document.getElementById('l-start').value = '';
+  document.getElementById('l-end').value = '';
+  document.getElementById('l-reason').value = '';
+  document.getElementById('leave-status').className = 'status';
+  openModal('leave-modal');
+}
+
 async function saveLeave() {
   const status = document.getElementById('leave-status');
   const payload = {
@@ -797,12 +839,13 @@ async function saveLeave() {
   }
   const res = await api('/api/leave-requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   if (res.ok) {
-    status.className = 'status success'; status.textContent = '✅ บันทึกการลาแล้ว';
-    document.getElementById('l-reason').value = '';
     document.getElementById('l-filter-year').value = new Date(payload.start_date).getFullYear();
+    closeModal('leave-modal');
     loadLeaveRequests(); loadLeaveBalance();
+  } else {
+    status.className = 'status error'; status.textContent = '❌ บันทึกไม่สำเร็จ';
+    setTimeout(() => { status.className = 'status'; }, 3000);
   }
-  setTimeout(() => { status.className = 'status'; }, 3000);
 }
 
 async function loadLeaveRequests() {
@@ -856,6 +899,13 @@ async function loadLeaveTypesTable() {
     <td>${t.quota_days_per_year}</td>
     <td><button class="btn btn-danger" onclick="deleteLeaveType(${t.id})">🗑️</button></td></tr>`).join('');
 }
+function openAddLtype() {
+  document.getElementById('lt-name').value = '';
+  document.getElementById('lt-quota').value = '0';
+  document.getElementById('lt-paid').value = 'true';
+  openModal('ltype-modal');
+}
+
 async function saveLeaveType() {
   const name = document.getElementById('lt-name').value.trim();
   if (!name) { alert('กรอกชื่อประเภท'); return; }
@@ -863,7 +913,7 @@ async function saveLeaveType() {
     name, quota_days_per_year: parseInt(document.getElementById('lt-quota').value) || 0,
     is_paid: document.getElementById('lt-paid').value === 'true',
   }) });
-  document.getElementById('lt-name').value = '';
+  closeModal('ltype-modal');
   await loadLeaveTypesDropdown(); loadLeaveTypesTable(); loadLeaveBalance();
 }
 async function deleteLeaveType(id) {
@@ -892,6 +942,16 @@ async function loadOvertime() {
       </td></tr>`;
   }).join('');
 }
+async function openAddOt() {
+  await populateEmployeeSelect('o-emp');
+  document.getElementById('o-date').value = '';
+  document.getElementById('o-hours').value = '';
+  document.getElementById('o-mult').value = '1.5';
+  document.getElementById('o-reason').value = '';
+  document.getElementById('ot-status').className = 'status';
+  openModal('ot-modal');
+}
+
 async function saveOvertime() {
   const status = document.getElementById('ot-status');
   const hours  = parseFloat(document.getElementById('o-hours').value);
@@ -907,14 +967,15 @@ async function saveOvertime() {
   }
   const res = await api('/api/overtime', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   if (res.ok) {
-    status.className = 'status success'; status.textContent = '✅ บันทึก OT แล้ว';
-    document.getElementById('o-hours').value = ''; document.getElementById('o-reason').value = '';
     const d = new Date(payload.work_date);
     document.getElementById('o-filter-year').value = d.getFullYear();
     document.getElementById('o-filter-month').value = d.getMonth() + 1;
+    closeModal('ot-modal');
     loadOvertime();
+  } else {
+    status.className = 'status error'; status.textContent = '❌ บันทึกไม่สำเร็จ';
+    setTimeout(() => { status.className = 'status'; }, 3000);
   }
-  setTimeout(() => { status.className = 'status'; }, 3000);
 }
 async function setOtStatus(id, status) {
   await api(`/api/overtime/${id}/status`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
