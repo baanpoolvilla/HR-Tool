@@ -178,6 +178,19 @@ async function loadDashboard() {
   document.getElementById('dash-absent').textContent     = d.absent_today;
   document.getElementById('dash-registered').textContent = d.registered;
 
+  // แถบแจ้งเตือนรออนุมัติ
+  try {
+    const pa = await (await api('/api/pending-approvals')).json();
+    const banner = document.getElementById('pending-banner');
+    if (pa.total > 0) {
+      document.getElementById('pending-text').textContent =
+        `มีคำขอรออนุมัติ ${pa.total} รายการ (ลา ${pa.leave} · OT ${pa.overtime})`;
+      banner.classList.remove('hidden');
+    } else {
+      banner.classList.add('hidden');
+    }
+  } catch (e) {}
+
   const recent = document.getElementById('dash-recent');
   if (!d.recent_scans.length) {
     recent.innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">ยังไม่มีการสแกนวันนี้</td></tr>';
@@ -311,7 +324,7 @@ async function loadUsers() {
         <td>${badge}</td>
         <td style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-enroll" onclick="startEnroll(${u.finger_id},'${u.name}')">👆 ลงทะเบียนนิ้ว</button>
-          <button class="btn btn-primary" onclick="editUser(${u.finger_id},'${u.name}','${u.employee_id||''}','${u.department||''}',${u.base_salary||0},${u.attendance_bonus||0},'${u.work_start_time||'08:00'}',${u.late_grace_minutes||15},'${u.checkout_start_time||'17:00'}',${u.shift_id||'null'},${u.sso_enabled||false})">✏️</button>
+          <button class="btn btn-primary" onclick="editUser(${u.finger_id},'${u.name}','${u.employee_id||''}','${u.department||''}',${u.base_salary||0},${u.attendance_bonus||0},'${u.work_start_time||'08:00'}',${u.late_grace_minutes||15},'${u.checkout_start_time||'17:00'}',${u.shift_id||'null'},${u.sso_enabled||false},${u.pf_percent||0},${u.tax_enabled||false})">✏️</button>
           <button class="btn btn-danger"  onclick="deleteUser(${u.finger_id})">🗑️</button>
         </td>
       </tr>`;
@@ -408,7 +421,7 @@ function cancelEnroll() {
 }
 
 // ===== Save / Edit / Delete =====
-function editUser(fid, name, empId, dept, salary, bonus, startTime, grace, checkoutTime, shiftId, ssoEnabled) {
+function editUser(fid, name, empId, dept, salary, bonus, startTime, grace, checkoutTime, shiftId, ssoEnabled, pfPercent, taxEnabled) {
   document.getElementById('f-finger-id').value     = fid;
   document.getElementById('f-name').value           = name;
   document.getElementById('f-emp-id').value         = empId;
@@ -420,6 +433,8 @@ function editUser(fid, name, empId, dept, salary, bonus, startTime, grace, check
   document.getElementById('f-checkout-time').value  = checkoutTime || '17:00';
   document.getElementById('f-shift').value          = (shiftId !== null && shiftId !== undefined) ? String(shiftId) : '';
   document.getElementById('f-sso').checked          = ssoEnabled === true;
+  document.getElementById('f-pf').value             = pfPercent    || 0;
+  document.getElementById('f-tax').checked          = taxEnabled === true;
   onShiftChange();
   window.scrollTo(0, 0);
 }
@@ -436,6 +451,8 @@ async function saveUser() {
   const checkout_start_time = document.getElementById('f-checkout-time').value || '17:00';
   const shift_id            = document.getElementById('f-shift').value || null;
   const sso_enabled         = document.getElementById('f-sso').checked;
+  const pf_percent          = parseFloat(document.getElementById('f-pf').value) || 0;
+  const tax_enabled         = document.getElementById('f-tax').checked;
   const status              = document.getElementById('user-status');
 
   if (!finger_id || !name) {
@@ -449,7 +466,7 @@ async function saveUser() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ finger_id: parseInt(finger_id), name, employee_id, department,
                            base_salary, attendance_bonus, work_start_time, late_grace_minutes,
-                           checkout_start_time, shift_id, sso_enabled }),
+                           checkout_start_time, shift_id, sso_enabled, pf_percent, tax_enabled }),
   });
 
   if (res.ok) {
@@ -462,6 +479,8 @@ async function saveUser() {
     document.getElementById('f-checkout-time').value = '17:00';
     document.getElementById('f-shift').value = '';
     document.getElementById('f-sso').checked = false;
+    document.getElementById('f-pf').value = '0';
+    document.getElementById('f-tax').checked = false;
     onShiftChange();
     loadUsers();
   }
@@ -1008,7 +1027,7 @@ function openPayslip(fid) {
   const M = MONTHS_TH;
   const line = (label, val, neg) =>
     `<div style="display:flex;justify-content:space-between;padding:5px 0"><span>${label}</span><span style="color:${neg ? 'var(--danger)' : 'var(--text)'}">${neg ? '-' : ''}${fmtMoney(val)}</span></div>`;
-  const noDed = u.sso === 0 && u.unpaid_leave_deduction === 0 && u.deduction === 0;
+  const noDed = u.sso === 0 && u.pf === 0 && u.income_tax === 0 && u.unpaid_leave_deduction === 0 && u.deduction === 0;
   document.getElementById('payslip-content').innerHTML = `
     <div id="payslip-print">
       <h3 style="text-align:center;margin-bottom:2px">สลิปเงินเดือน</h3>
@@ -1025,6 +1044,8 @@ function openPayslip(fid) {
         <div style="display:flex;justify-content:space-between;font-weight:700;padding-top:4px"><span>รวมรายรับ</span><span>${fmtMoney(u.gross_pay)}</span></div>
         <div style="font-weight:700;color:var(--danger);border-bottom:1px solid var(--border);padding-bottom:4px;margin:10px 0 4px">รายการหัก</div>
         ${u.sso > 0 ? line('ประกันสังคม 5%', u.sso, true) : ''}
+        ${u.pf > 0 ? line('กองทุนสำรองเลี้ยงชีพ ' + u.pf_percent + '%', u.pf, true) : ''}
+        ${u.income_tax > 0 ? line('ภาษีเงินได้ (ประมาณการ)', u.income_tax, true) : ''}
         ${u.unpaid_leave_deduction > 0 ? line('ลาไม่รับค่าจ้าง (' + u.unpaid_leave_days + ' วัน)', u.unpaid_leave_deduction, true) : ''}
         ${u.deduction > 0 ? line('เงินหัก' + (u.adj_note ? ' (' + u.adj_note + ')' : ''), u.deduction, true) : ''}
         ${noDed ? '<div class="muted" style="padding:4px 0">— ไม่มีรายการหัก —</div>' : ''}

@@ -100,6 +100,23 @@ let sensorClearPending = false;
 // Bangkok UTC+7 offset helper
 function toTH(d) { return new Date(new Date(d).getTime() + 7 * 3600 * 1000); }
 
+// ===== ภาษีเงินได้บุคคลธรรมดา (ประมาณการ withholding รายเดือน) =====
+// อัตราขั้นบันได — ต้องให้ฝ่ายบัญชีตรวจสอบก่อนใช้จริง (ยังไม่รวมลดหย่อนคู่สมรส/บุตร/ประกัน)
+function computeThaiTax(taxableAnnual) {
+  const brackets = [
+    [150000, 0.00], [150000, 0.05], [200000, 0.10], [250000, 0.15],
+    [250000, 0.20], [1000000, 0.25], [3000000, 0.30], [Infinity, 0.35],
+  ];
+  let tax = 0, remaining = Math.max(0, taxableAnnual);
+  for (const [size, rate] of brackets) {
+    if (remaining <= 0) break;
+    const amt = Math.min(remaining, size);
+    tax += amt * rate;
+    remaining -= amt;
+  }
+  return tax;
+}
+
 // ===== Audit log =====
 async function logAudit(action, target, detail, req) {
   const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || null;
@@ -347,6 +364,8 @@ async function initDB() {
 
   // ===== Phase 5: payroll เต็ม =====
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS sso_enabled BOOLEAN DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS pf_percent NUMERIC(5,2) DEFAULT 0;`);
+  await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE;`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS monthly_adjustments (
       id         SERIAL PRIMARY KEY,
@@ -593,22 +612,24 @@ app.get('/api/users', requireAdmin, async (req, res) => {
 app.post('/api/users', requireAdmin, async (req, res) => {
   const { finger_id, name, employee_id, department,
           base_salary, attendance_bonus, work_start_time, late_grace_minutes,
-          checkout_start_time, shift_id, sso_enabled } = req.body;
+          checkout_start_time, shift_id, sso_enabled, pf_percent, tax_enabled } = req.body;
   await pool.query(`
     INSERT INTO fp_users
       (finger_id, name, employee_id, department, base_salary, attendance_bonus,
-       work_start_time, late_grace_minutes, checkout_start_time, shift_id, sso_enabled)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       work_start_time, late_grace_minutes, checkout_start_time, shift_id, sso_enabled,
+       pf_percent, tax_enabled)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
     ON CONFLICT (finger_id) DO UPDATE SET
       name=$2, employee_id=$3, department=$4,
       base_salary=$5, attendance_bonus=$6,
       work_start_time=$7, late_grace_minutes=$8, checkout_start_time=$9,
-      shift_id=$10, sso_enabled=$11
+      shift_id=$10, sso_enabled=$11, pf_percent=$12, tax_enabled=$13
   `, [finger_id, name, employee_id, department,
       base_salary || 0, attendance_bonus || 0,
       work_start_time || '08:00', late_grace_minutes || 15,
       checkout_start_time || '17:00', shift_id ? parseInt(shift_id) : null,
-      sso_enabled === true || sso_enabled === 'true']);
+      sso_enabled === true || sso_enabled === 'true',
+      parseFloat(pf_percent) || 0, tax_enabled === true || tax_enabled === 'true']);
   await logAudit('user_upsert', finger_id, { name, employee_id, department }, req);
   res.json({ success: true });
 });
@@ -966,6 +987,16 @@ app.get('/api/dashboard', requireAdmin, async (req, res) => {
   });
 });
 
+// WEB — จำนวนรายการรออนุมัติ (ลา + OT)
+app.get('/api/pending-approvals', requireAdmin, async (req, res) => {
+  const [lv, ot] = await Promise.all([
+    pool.query(`SELECT COUNT(*) c FROM leave_requests WHERE status = 'PENDING'`),
+    pool.query(`SELECT COUNT(*) c FROM overtime_records WHERE status = 'PENDING'`),
+  ]);
+  const leave = parseInt(lv.rows[0].c), overtime = parseInt(ot.rows[0].c);
+  res.json({ leave, overtime, total: leave + overtime });
+});
+
 // WEB — stats
 app.get('/api/stats', requireAdmin, async (req, res) => {
   const today = await pool.query(`
@@ -1130,13 +1161,26 @@ app.get('/api/report', requireAdmin, async (req, res) => {
 
     const sso = (u.sso_enabled) ? Math.min(Math.round(base * 0.05), 750) : 0;
 
+    // กองทุนสำรองเลี้ยงชีพ (ฝั่งพนักงาน)
+    const pf_percent = parseFloat(u.pf_percent || 0);
+    const pf = +(base * pf_percent / 100).toFixed(2);
+
+    // ภาษีเงินได้ (ประมาณการรายเดือน = ภาษีทั้งปี ÷ 12)
+    let income_tax = 0;
+    if (u.tax_enabled) {
+      const annualIncome = base * 12;
+      const expense      = Math.min(annualIncome * 0.5, 100000);
+      const taxable      = Math.max(0, annualIncome - expense - 60000 - (sso * 12) - (pf * 12));
+      income_tax = +(computeThaiTax(taxable) / 12).toFixed(2);
+    }
+
     const adj        = adjMap[u.finger_id] || {};
     const allowance  = parseFloat(adj.allowance || 0);
     const deduction  = parseFloat(adj.deduction || 0);
     const adj_note   = adj.note || '';
 
     const gross_pay       = +(base + bonus_earned + commission + ot_pay + allowance).toFixed(2);
-    const total_deduction = +(sso + unpaid_leave_deduction + deduction).toFixed(2);
+    const total_deduction = +(sso + pf + income_tax + unpaid_leave_deduction + deduction).toFixed(2);
     const net_pay         = +(gross_pay - total_deduction).toFixed(2);
 
     return {
@@ -1152,6 +1196,7 @@ app.get('/api/report', requireAdmin, async (req, res) => {
       ot_minutes, ot_pay,
       paid_leave_days, unpaid_leave_days, unpaid_leave_deduction,
       sso_enabled: !!u.sso_enabled, sso,
+      pf_percent, pf, tax_enabled: !!u.tax_enabled, income_tax,
       allowance, deduction, adj_note,
       gross_pay, total_deduction, net_pay,
       total_pay: net_pay, // backward compat

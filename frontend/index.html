@@ -83,6 +83,11 @@
 
     <!-- ===== DASHBOARD ===== -->
     <div id="tab-dashboard" class="content">
+      <div id="pending-banner" class="hidden" style="background:var(--warning-soft);color:var(--warning);border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:12px;cursor:pointer" onclick="showPage('leave', document.querySelector('.nav-item[data-page=leave]'))">
+        <span style="font-size:22px">🔔</span>
+        <div style="flex:1"><strong id="pending-text"></strong></div>
+        <span class="btn btn-warning">ไปอนุมัติ →</span>
+      </div>
       <div class="stats">
         <div class="stat">
           <div class="stat-ico green">✅</div>
@@ -165,12 +170,21 @@
           <div class="form-group" style="max-width:130px"><label>เวลาเข้างาน</label><input type="time" id="f-start-time" value="08:00"></div>
           <div class="form-group" style="max-width:130px"><label>ผ่อนผัน (นาที)</label><input type="number" id="f-grace" placeholder="15" min="0" max="120"></div>
           <div class="form-group" style="max-width:130px"><label>OUT หลังเวลา</label><input type="time" id="f-checkout-time" value="17:00"></div>
-          <div class="form-group" style="max-width:160px"><label>ประกันสังคม (หัก 5%)</label>
+          <div class="form-group" style="max-width:150px"><label>ประกันสังคม</label>
             <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text);padding-top:6px">
-              <input type="checkbox" id="f-sso" style="width:auto"> หักประกันสังคม
+              <input type="checkbox" id="f-sso" style="width:auto"> หัก 5%
+            </label>
+          </div>
+          <div class="form-group" style="max-width:130px"><label>กองทุนฯ (% ต่อเดือน)</label><input type="number" id="f-pf" value="0" min="0" max="30" step="0.5"></div>
+          <div class="form-group" style="max-width:140px"><label>ภาษีเงินได้</label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text);padding-top:6px">
+              <input type="checkbox" id="f-tax" style="width:auto"> คิดภาษี
             </label>
           </div>
           <div class="form-group" style="max-width:110px;justify-content:flex-end"><label>&nbsp;</label><button class="btn btn-success" style="justify-content:center" onclick="saveUser()">💾 บันทึก</button></div>
+        </div>
+        <div style="background:var(--warning-soft);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--warning)">
+          ⚠️ การคิดภาษีเป็นการ<strong>ประมาณการ</strong>ตามอัตราขั้นบันได (ยังไม่รวมลดหย่อนคู่สมรส/บุตร/ประกัน) — ก่อนใช้จริงควรให้ฝ่ายบัญชีตรวจสอบ
         </div>
       </div>
       <div class="card">
