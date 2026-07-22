@@ -60,7 +60,8 @@ async function logout() {
 // ===== Navigation =====
 const PAGE_TITLES = {
   dashboard: 'ภาพรวม', logs: 'บันทึกเวลา', users: 'พนักงาน',
-  report: 'รายงาน & เงินเดือน', config: 'ตั้งค่าระบบ'
+  report: 'รายงาน & เงินเดือน', config: 'ตั้งค่าระบบ',
+  shifts: 'กะ / ตารางเวร', holidays: 'วันหยุด'
 };
 
 function showPage(page, el) {
@@ -76,8 +77,15 @@ function showPage(page, el) {
   closeSidebar();
   if (page === 'dashboard') loadDashboard();
   if (page === 'logs')   loadLogs();
-  if (page === 'users')  { loadUsers(); applyDefaultsToForm(); }
+  if (page === 'users')  { populateShiftDropdown(); loadUsers(); applyDefaultsToForm(); }
+  if (page === 'report') {}
   if (page === 'config') { loadSettings(); loadDevices(); loadSystemInfo(); }
+  if (page === 'shifts') loadShifts();
+  if (page === 'holidays') {
+    const y = document.getElementById('h-filter-year');
+    if (!y.value) y.value = new Date().getFullYear();
+    loadHolidays();
+  }
 }
 
 function openSidebar()  { document.getElementById('sidebar').classList.add('open');  document.getElementById('scrim').classList.add('show'); }
@@ -266,7 +274,7 @@ async function loadUsers() {
         <td>${badge}</td>
         <td style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-enroll" onclick="startEnroll(${u.finger_id},'${u.name}')">👆 ลงทะเบียนนิ้ว</button>
-          <button class="btn btn-primary" onclick="editUser(${u.finger_id},'${u.name}','${u.employee_id||''}','${u.department||''}',${u.base_salary||0},${u.attendance_bonus||0},'${u.work_start_time||'08:00'}',${u.late_grace_minutes||15},'${u.checkout_start_time||'17:00'}')">✏️</button>
+          <button class="btn btn-primary" onclick="editUser(${u.finger_id},'${u.name}','${u.employee_id||''}','${u.department||''}',${u.base_salary||0},${u.attendance_bonus||0},'${u.work_start_time||'08:00'}',${u.late_grace_minutes||15},'${u.checkout_start_time||'17:00'}',${u.shift_id||'null'})">✏️</button>
           <button class="btn btn-danger"  onclick="deleteUser(${u.finger_id})">🗑️</button>
         </td>
       </tr>`;
@@ -363,7 +371,7 @@ function cancelEnroll() {
 }
 
 // ===== Save / Edit / Delete =====
-function editUser(fid, name, empId, dept, salary, bonus, startTime, grace, checkoutTime) {
+function editUser(fid, name, empId, dept, salary, bonus, startTime, grace, checkoutTime, shiftId) {
   document.getElementById('f-finger-id').value     = fid;
   document.getElementById('f-name').value           = name;
   document.getElementById('f-emp-id').value         = empId;
@@ -373,6 +381,8 @@ function editUser(fid, name, empId, dept, salary, bonus, startTime, grace, check
   document.getElementById('f-start-time').value     = startTime    || '08:00';
   document.getElementById('f-grace').value          = grace        || 15;
   document.getElementById('f-checkout-time').value  = checkoutTime || '17:00';
+  document.getElementById('f-shift').value          = (shiftId !== null && shiftId !== undefined) ? String(shiftId) : '';
+  onShiftChange();
   window.scrollTo(0, 0);
 }
 
@@ -386,6 +396,7 @@ async function saveUser() {
   const work_start_time     = document.getElementById('f-start-time').value    || '08:00';
   const late_grace_minutes  = parseInt(document.getElementById('f-grace').value)    || 15;
   const checkout_start_time = document.getElementById('f-checkout-time').value || '17:00';
+  const shift_id            = document.getElementById('f-shift').value || null;
   const status              = document.getElementById('user-status');
 
   if (!finger_id || !name) {
@@ -399,7 +410,7 @@ async function saveUser() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ finger_id: parseInt(finger_id), name, employee_id, department,
                            base_salary, attendance_bonus, work_start_time, late_grace_minutes,
-                           checkout_start_time }),
+                           checkout_start_time, shift_id }),
   });
 
   if (res.ok) {
@@ -410,6 +421,8 @@ async function saveUser() {
     });
     document.getElementById('f-start-time').value    = '08:00';
     document.getElementById('f-checkout-time').value = '17:00';
+    document.getElementById('f-shift').value = '';
+    onShiftChange();
     loadUsers();
   }
   setTimeout(() => { status.className = 'status'; }, 3000);
@@ -530,6 +543,162 @@ async function loadSystemInfo() {
         <div><div class="stat-num" style="font-size:18px">${c.value}</div><div class="stat-label">${c.label}</div></div>
       </div>`).join('');
   } catch(e) {}
+}
+
+// ===== Shifts =====
+let shiftsCache = [];
+
+async function loadShifts() {
+  const res = await api('/api/shifts');
+  shiftsCache = await res.json();
+  const tbody = document.getElementById('shifts-body');
+  if (!shiftsCache.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="muted" style="text-align:center;padding:20px">ยังไม่มีกะ</td></tr>';
+    return;
+  }
+  tbody.innerHTML = shiftsCache.map(s => `
+    <tr>
+      <td><strong>${s.name}</strong></td>
+      <td>${s.start_time}</td>
+      <td>${s.end_time}</td>
+      <td>${s.break_minutes} นาที</td>
+      <td>${s.active ? '<span class="badge badge-ok">ใช้งาน</span>' : '<span class="badge badge-no">ปิด</span>'}</td>
+      <td style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="editShift(${s.id})">✏️</button>
+        <button class="btn btn-danger" onclick="deleteShift(${s.id},'${s.name.replace(/'/g,"\\'")}')">🗑️</button>
+      </td>
+    </tr>`).join('');
+}
+
+function editShift(id) {
+  const s = shiftsCache.find(x => x.id === id);
+  if (!s) return;
+  document.getElementById('s-id').value    = s.id;
+  document.getElementById('s-name').value  = s.name;
+  document.getElementById('s-start').value = s.start_time;
+  document.getElementById('s-end').value   = s.end_time;
+  document.getElementById('s-break').value = s.break_minutes;
+  document.getElementById('shift-form-title').textContent = '✏️ แก้ไขกะ';
+  window.scrollTo(0, 0);
+}
+
+function resetShiftForm() {
+  document.getElementById('s-id').value    = '';
+  document.getElementById('s-name').value  = '';
+  document.getElementById('s-start').value = '08:00';
+  document.getElementById('s-end').value   = '17:00';
+  document.getElementById('s-break').value = '0';
+  document.getElementById('shift-form-title').textContent = '➕ เพิ่มกะทำงาน';
+}
+
+async function saveShift() {
+  const status = document.getElementById('shift-status');
+  const payload = {
+    id:            document.getElementById('s-id').value || null,
+    name:          document.getElementById('s-name').value.trim(),
+    start_time:    document.getElementById('s-start').value,
+    end_time:      document.getElementById('s-end').value,
+    break_minutes: parseInt(document.getElementById('s-break').value) || 0,
+  };
+  if (!payload.name) {
+    status.className = 'status error'; status.textContent = '⚠️ กรุณากรอกชื่อกะ';
+    return;
+  }
+  const res = await api('/api/shifts', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  if (res.ok) {
+    status.className = 'status success'; status.textContent = '✅ บันทึกกะแล้ว';
+    resetShiftForm(); loadShifts();
+  }
+  setTimeout(() => { status.className = 'status'; }, 3000);
+}
+
+async function deleteShift(id, name) {
+  if (!confirm(`ลบกะ "${name}"?\nพนักงานที่ผูกกะนี้จะกลับไปใช้เวลาส่วนตัวแทน`)) return;
+  await api('/api/shifts/' + id, { method: 'DELETE' });
+  loadShifts();
+}
+
+// ===== Shift dropdown บนฟอร์มพนักงาน =====
+async function populateShiftDropdown() {
+  try {
+    const res = await api('/api/shifts');
+    shiftsCache = await res.json();
+  } catch (e) { return; }
+  const sel = document.getElementById('f-shift');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— ไม่ใช้กะ —</option>' +
+    shiftsCache.filter(s => s.active).map(s =>
+      `<option value="${s.id}">${s.name} (${s.start_time}-${s.end_time})</option>`).join('');
+  sel.value = cur;
+}
+
+function onShiftChange() {
+  const sel = document.getElementById('f-shift');
+  const s   = shiftsCache.find(x => String(x.id) === sel.value);
+  const st  = document.getElementById('f-start-time');
+  const ct  = document.getElementById('f-checkout-time');
+  if (s) {
+    st.value = s.start_time; ct.value = s.end_time;
+    st.disabled = true; ct.disabled = true;
+  } else {
+    st.disabled = false; ct.disabled = false;
+  }
+}
+
+// ===== Holidays =====
+async function loadHolidays() {
+  const year = document.getElementById('h-filter-year').value || new Date().getFullYear();
+  document.getElementById('holiday-year-label').textContent = year;
+  const res = await api('/api/holidays?year=' + year);
+  const rows = await res.json();
+  const tbody = document.getElementById('holidays-body');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">ยังไม่มีวันหยุดในปีนี้</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(h => {
+    const d = new Date(h.holiday_date + 'T00:00:00');
+    const dateStr = d.toLocaleDateString('th-TH', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+    const paid = h.is_paid ? '<span class="badge badge-ok">มีค่าจ้าง</span>' : '<span class="badge badge-out">ไม่มีค่าจ้าง</span>';
+    return `<tr>
+      <td>${dateStr}</td>
+      <td>${h.name || '-'}</td>
+      <td>${paid}</td>
+      <td><button class="btn btn-danger" onclick="deleteHoliday(${h.id})">🗑️</button></td>
+    </tr>`;
+  }).join('');
+}
+
+async function saveHoliday() {
+  const status = document.getElementById('holiday-status');
+  const holiday_date = document.getElementById('h-date').value;
+  if (!holiday_date) {
+    status.className = 'status error'; status.textContent = '⚠️ กรุณาเลือกวันที่';
+    return;
+  }
+  const res = await api('/api/holidays', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      holiday_date,
+      name:    document.getElementById('h-name').value.trim(),
+      is_paid: document.getElementById('h-paid').value === 'true',
+    }),
+  });
+  if (res.ok) {
+    status.className = 'status success'; status.textContent = '✅ บันทึกวันหยุดแล้ว';
+    document.getElementById('h-name').value = '';
+    document.getElementById('h-filter-year').value = new Date(holiday_date).getFullYear();
+    loadHolidays();
+  }
+  setTimeout(() => { status.className = 'status'; }, 3000);
+}
+
+async function deleteHoliday(id) {
+  if (!confirm('ลบวันหยุดนี้?')) return;
+  await api('/api/holidays/' + id, { method: 'DELETE' });
+  loadHolidays();
 }
 
 // ===== Report & Payroll =====

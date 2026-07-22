@@ -50,9 +50,14 @@
       <span class="ico">⚙️</span> ตั้งค่าระบบ
     </div>
 
+    <div class="nav-item" data-page="shifts" onclick="showPage('shifts', this)">
+      <span class="ico">📅</span> กะ / ตารางเวร
+    </div>
+    <div class="nav-item" data-page="holidays" onclick="showPage('holidays', this)">
+      <span class="ico">🌴</span> วันหยุด
+    </div>
+
     <div class="nav-group-label">เร็วๆ นี้</div>
-    <div class="nav-item disabled"><span class="ico">📅</span> กะ / ตารางเวร <span class="nav-soon">SOON</span></div>
-    <div class="nav-item disabled"><span class="ico">🌴</span> วันหยุด <span class="nav-soon">SOON</span></div>
     <div class="nav-item disabled"><span class="ico">📝</span> การลา <span class="nav-soon">SOON</span></div>
     <div class="nav-item disabled"><span class="ico">⏱️</span> ล่วงเวลา (OT) <span class="nav-soon">SOON</span></div>
     <div class="nav-item disabled"><span class="ico">🧾</span> Timesheet <span class="nav-soon">SOON</span></div>
@@ -148,6 +153,9 @@
           <div class="form-group" style="max-width:150px"><label>แผนก</label><input type="text" id="f-dept" placeholder="แผนกบริการ"></div>
         </div>
         <div class="form-row">
+          <div class="form-group" style="max-width:180px"><label>กะ (ถ้าใช้กะ จะใช้เวลากะแทน)</label>
+            <select id="f-shift" onchange="onShiftChange()"><option value="">— ไม่ใช้กะ —</option></select>
+          </div>
           <div class="form-group" style="max-width:140px"><label>ฐานเดือน (บาท)</label><input type="number" id="f-salary" placeholder="0" min="0" step="100"></div>
           <div class="form-group" style="max-width:140px"><label>เบี้ยขยัน (บาท)</label><input type="number" id="f-bonus" placeholder="0" min="0" step="100"></div>
           <div class="form-group" style="max-width:130px"><label>เวลาเข้างาน</label><input type="time" id="f-start-time" value="08:00"></div>
@@ -252,6 +260,69 @@
       <div class="card">
         <h2>ℹ️ ข้อมูลระบบ</h2>
         <div id="system-info" style="display:flex;gap:12px;flex-wrap:wrap"></div>
+      </div>
+    </div>
+
+    <!-- ===== SHIFTS ===== -->
+    <div id="tab-shifts" class="content hidden">
+      <div class="card">
+        <h2 id="shift-form-title">➕ เพิ่มกะทำงาน</h2>
+        <p class="muted" style="font-size:13px;margin-bottom:12px">กำหนดกะแล้วนำไปผูกกับพนักงานในหน้า "พนักงาน" — พนักงานที่ผูกกะจะใช้เวลากะนี้คิดเข้า-ออกงาน</p>
+        <div id="shift-status" class="status"></div>
+        <input type="hidden" id="s-id">
+        <div class="form-row">
+          <div class="form-group"><label>ชื่อกะ *</label><input type="text" id="s-name" placeholder="เช่น กะเช้า, กะบ่าย"></div>
+          <div class="form-group" style="max-width:130px"><label>เวลาเข้า *</label><input type="time" id="s-start" value="08:00"></div>
+          <div class="form-group" style="max-width:130px"><label>เวลาออก *</label><input type="time" id="s-end" value="17:00"></div>
+          <div class="form-group" style="max-width:140px"><label>พักเบรก (นาที)</label><input type="number" id="s-break" value="0" min="0" step="15"></div>
+          <div class="form-group" style="max-width:180px;justify-content:flex-end"><label>&nbsp;</label>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-success" style="justify-content:center;flex:1" onclick="saveShift()">💾 บันทึก</button>
+              <button class="btn btn-ghost" onclick="resetShiftForm()">ล้าง</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>📅 รายการกะ</h2><button class="btn btn-primary" onclick="loadShifts()">🔄 รีเฟรช</button></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ชื่อกะ</th><th>เข้า</th><th>ออก</th><th>พักเบรก</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
+            <tbody id="shifts-body"><tr><td colspan="6" class="muted" style="text-align:center;padding:20px">กำลังโหลด...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== HOLIDAYS ===== -->
+    <div id="tab-holidays" class="content hidden">
+      <div class="card">
+        <h2>➕ เพิ่มวันหยุด</h2>
+        <p class="muted" style="font-size:13px;margin-bottom:12px">วันหยุดบริษัท/นักขัตฤกษ์ — ใช้ประกอบการคิดเงินเดือนในเฟสถัดไป</p>
+        <div id="holiday-status" class="status"></div>
+        <div class="form-row">
+          <div class="form-group" style="max-width:180px"><label>วันที่ *</label><input type="date" id="h-date"></div>
+          <div class="form-group"><label>ชื่อวันหยุด</label><input type="text" id="h-name" placeholder="เช่น วันสงกรานต์"></div>
+          <div class="form-group" style="max-width:150px"><label>ประเภท</label>
+            <select id="h-paid"><option value="true">มีค่าจ้าง</option><option value="false">ไม่มีค่าจ้าง</option></select>
+          </div>
+          <div class="form-group" style="max-width:110px;justify-content:flex-end"><label>&nbsp;</label><button class="btn btn-success" style="justify-content:center" onclick="saveHoliday()">💾 บันทึก</button></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h2>🌴 วันหยุดปี <span id="holiday-year-label"></span></h2>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="number" id="h-filter-year" style="width:100px" onchange="loadHolidays()">
+            <button class="btn btn-primary" onclick="loadHolidays()">🔄 รีเฟรช</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>วันที่</th><th>ชื่อวันหยุด</th><th>ประเภท</th><th>จัดการ</th></tr></thead>
+            <tbody id="holidays-body"><tr><td colspan="4" class="muted" style="text-align:center;padding:20px">กำลังโหลด...</td></tr></tbody>
+          </table>
+        </div>
       </div>
     </div>
 

@@ -256,6 +256,29 @@ async function initDB() {
     );
   `);
 
+  // ===== Phase 2: กะ/ตารางเวร + วันหยุด =====
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shifts (
+      id            SERIAL PRIMARY KEY,
+      name          VARCHAR(60) NOT NULL,
+      start_time    VARCHAR(8)  NOT NULL DEFAULT '08:00',
+      end_time      VARCHAR(8)  NOT NULL DEFAULT '17:00',
+      break_minutes INTEGER     NOT NULL DEFAULT 0,
+      active        BOOLEAN     NOT NULL DEFAULT TRUE,
+      created_at    TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS shift_id INTEGER;`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS holidays (
+      id           SERIAL PRIMARY KEY,
+      holiday_date DATE UNIQUE NOT NULL,
+      name         VARCHAR(100) NOT NULL DEFAULT '',
+      is_paid      BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at   TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS audit_log (
       id         SERIAL PRIMARY KEY,
@@ -305,7 +328,14 @@ app.get('/api/audit-log', requireAdmin, async (req, res) => {
 app.post('/api/attendance', requireDeviceKey, async (req, res) => {
   const { device_id, finger_id } = req.body;
 
-  const user    = await pool.query('SELECT * FROM fp_users WHERE finger_id = $1', [finger_id]);
+  // LEFT JOIN กะ (ถ้าผูกไว้) — ใช้เวลากะแทน work_start_time/checkout ต่อคน
+  const user    = await pool.query(
+    `SELECT u.*, s.start_time AS shift_start, s.end_time AS shift_end
+     FROM fp_users u
+     LEFT JOIN shifts s ON u.shift_id = s.id AND s.active = TRUE
+     WHERE u.finger_id = $1`,
+    [finger_id]
+  );
   const userRow = user.rows[0];
   const name    = userRow ? userRow.name : 'Unknown';
 
@@ -314,9 +344,9 @@ app.post('/api/attendance', requireDeviceKey, async (req, res) => {
   const nowMin     = bangkokNow.getUTCHours() * 60 + bangkokNow.getUTCMinutes();
   const todayDate  = bangkokNow.toISOString().split('T')[0];
 
-  // เวลาเข้างาน + ผ่อนผัน
-  const [wsh, wsm]   = (userRow?.work_start_time   || '08:00').split(':').map(Number);
-  const [coh, com]   = (userRow?.checkout_start_time || '17:00').split(':').map(Number);
+  // เวลาเข้างาน/ออกงาน: กะ > ค่าต่อคน > default + ผ่อนผัน
+  const [wsh, wsm]   = (userRow?.shift_start || userRow?.work_start_time    || '08:00').split(':').map(Number);
+  const [coh, com]   = (userRow?.shift_end   || userRow?.checkout_start_time || '17:00').split(':').map(Number);
   const workStartMin  = wsh * 60 + (wsm || 0);
   const grace         = parseInt(userRow?.late_grace_minutes || 15);
   const lateAfterMin  = workStartMin + grace;
@@ -481,20 +511,21 @@ app.get('/api/users', requireAdmin, async (req, res) => {
 // WEB — upsert user (with payroll settings)
 app.post('/api/users', requireAdmin, async (req, res) => {
   const { finger_id, name, employee_id, department,
-          base_salary, attendance_bonus, work_start_time, late_grace_minutes, checkout_start_time } = req.body;
+          base_salary, attendance_bonus, work_start_time, late_grace_minutes,
+          checkout_start_time, shift_id } = req.body;
   await pool.query(`
     INSERT INTO fp_users
       (finger_id, name, employee_id, department, base_salary, attendance_bonus,
-       work_start_time, late_grace_minutes, checkout_start_time)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       work_start_time, late_grace_minutes, checkout_start_time, shift_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
     ON CONFLICT (finger_id) DO UPDATE SET
       name=$2, employee_id=$3, department=$4,
       base_salary=$5, attendance_bonus=$6,
-      work_start_time=$7, late_grace_minutes=$8, checkout_start_time=$9
+      work_start_time=$7, late_grace_minutes=$8, checkout_start_time=$9, shift_id=$10
   `, [finger_id, name, employee_id, department,
       base_salary || 0, attendance_bonus || 0,
       work_start_time || '08:00', late_grace_minutes || 15,
-      checkout_start_time || '17:00']);
+      checkout_start_time || '17:00', shift_id ? parseInt(shift_id) : null]);
   await logAudit('user_upsert', finger_id, { name, employee_id, department }, req);
   res.json({ success: true });
 });
@@ -503,6 +534,66 @@ app.post('/api/users', requireAdmin, async (req, res) => {
 app.delete('/api/users/:finger_id', requireAdmin, async (req, res) => {
   await pool.query('DELETE FROM fp_users WHERE finger_id = $1', [req.params.finger_id]);
   await logAudit('user_delete', req.params.finger_id, {}, req);
+  res.json({ success: true });
+});
+
+// ===== Phase 2: Shifts =====
+app.get('/api/shifts', requireAdmin, async (req, res) => {
+  const result = await pool.query('SELECT * FROM shifts ORDER BY start_time, name');
+  res.json(result.rows);
+});
+
+app.post('/api/shifts', requireAdmin, async (req, res) => {
+  const { id, name, start_time, end_time, break_minutes, active } = req.body;
+  if (!name || !start_time || !end_time) return res.status(400).json({ error: 'missing_fields' });
+  if (id) {
+    await pool.query(
+      `UPDATE shifts SET name=$2, start_time=$3, end_time=$4, break_minutes=$5, active=$6 WHERE id=$1`,
+      [id, name, start_time, end_time, parseInt(break_minutes) || 0, active !== false]
+    );
+  } else {
+    await pool.query(
+      `INSERT INTO shifts (name, start_time, end_time, break_minutes, active) VALUES ($1,$2,$3,$4,$5)`,
+      [name, start_time, end_time, parseInt(break_minutes) || 0, active !== false]
+    );
+  }
+  await logAudit('shift_upsert', name, { id, start_time, end_time }, req);
+  res.json({ success: true });
+});
+
+app.delete('/api/shifts/:id', requireAdmin, async (req, res) => {
+  // ปลดกะออกจากพนักงานที่ผูกไว้ก่อน แล้วจึงลบ
+  await pool.query('UPDATE fp_users SET shift_id = NULL WHERE shift_id = $1', [req.params.id]);
+  await pool.query('DELETE FROM shifts WHERE id = $1', [req.params.id]);
+  await logAudit('shift_delete', req.params.id, {}, req);
+  res.json({ success: true });
+});
+
+// ===== Phase 2: Holidays =====
+app.get('/api/holidays', requireAdmin, async (req, res) => {
+  const year = parseInt(req.query.year);
+  const cols = `id, to_char(holiday_date, 'YYYY-MM-DD') AS holiday_date, name, is_paid`;
+  const result = year
+    ? await pool.query(`SELECT ${cols} FROM holidays WHERE EXTRACT(YEAR FROM holiday_date) = $1 ORDER BY holiday_date`, [year])
+    : await pool.query(`SELECT ${cols} FROM holidays ORDER BY holiday_date`);
+  res.json(result.rows);
+});
+
+app.post('/api/holidays', requireAdmin, async (req, res) => {
+  const { holiday_date, name, is_paid } = req.body;
+  if (!holiday_date) return res.status(400).json({ error: 'missing_date' });
+  await pool.query(
+    `INSERT INTO holidays (holiday_date, name, is_paid) VALUES ($1,$2,$3)
+     ON CONFLICT (holiday_date) DO UPDATE SET name=$2, is_paid=$3`,
+    [holiday_date, name || '', is_paid !== false]
+  );
+  await logAudit('holiday_upsert', holiday_date, { name }, req);
+  res.json({ success: true });
+});
+
+app.delete('/api/holidays/:id', requireAdmin, async (req, res) => {
+  await pool.query('DELETE FROM holidays WHERE id = $1', [req.params.id]);
+  await logAudit('holiday_delete', req.params.id, {}, req);
   res.json({ success: true });
 });
 
@@ -581,7 +672,12 @@ app.get('/api/report', requireAdmin, async (req, res) => {
   const month = parseInt(req.query.month) || (new Date().getMonth() + 1);
 
   const [usersRes, logsRes, commRes] = await Promise.all([
-    pool.query('SELECT * FROM fp_users ORDER BY finger_id'),
+    pool.query(
+      `SELECT u.*, s.start_time AS shift_start, s.end_time AS shift_end
+       FROM fp_users u
+       LEFT JOIN shifts s ON u.shift_id = s.id AND s.active = TRUE
+       ORDER BY u.finger_id`
+    ),
     pool.query(
       `SELECT finger_id, check_type, check_time FROM attendance_logs
        WHERE EXTRACT(YEAR FROM check_time) = $1 AND EXTRACT(MONTH FROM check_time) = $2
@@ -611,7 +707,8 @@ app.get('/api/report', requireAdmin, async (req, res) => {
 
   const report = usersRes.rows.map(u => {
     const userLogs = logsByUser[u.finger_id] || {};
-    const [sh, sm] = (u.work_start_time || '08:00').split(':').map(Number);
+    const effStart = u.shift_start || u.work_start_time || '08:00';
+    const [sh, sm] = effStart.split(':').map(Number);
     const startMin = sh * 60 + (sm || 0);
     const grace    = parseInt(u.late_grace_minutes) || 15;
 
@@ -652,7 +749,7 @@ app.get('/api/report', requireAdmin, async (req, res) => {
       employee_id: u.employee_id, department: u.department,
       base_salary:       parseFloat(u.base_salary || 0),
       attendance_bonus:  parseFloat(u.attendance_bonus || 0),
-      work_start_time:   u.work_start_time || '08:00',
+      work_start_time:   effStart,
       late_grace_minutes: grace,
       days_present, days_late, commission,
       commission_notes: commMap[u.finger_id]?.notes || '',
