@@ -56,11 +56,15 @@
     <div class="nav-item" data-page="holidays" onclick="showPage('holidays', this)">
       <span class="ico">🌴</span> วันหยุด
     </div>
-
-    <div class="nav-group-label">เร็วๆ นี้</div>
-    <div class="nav-item disabled"><span class="ico">📝</span> การลา <span class="nav-soon">SOON</span></div>
-    <div class="nav-item disabled"><span class="ico">⏱️</span> ล่วงเวลา (OT) <span class="nav-soon">SOON</span></div>
-    <div class="nav-item disabled"><span class="ico">🧾</span> Timesheet <span class="nav-soon">SOON</span></div>
+    <div class="nav-item" data-page="leave" onclick="showPage('leave', this)">
+      <span class="ico">📝</span> การลา
+    </div>
+    <div class="nav-item" data-page="ot" onclick="showPage('ot', this)">
+      <span class="ico">⏱️</span> ล่วงเวลา (OT)
+    </div>
+    <div class="nav-item" data-page="timesheet" onclick="showPage('timesheet', this)">
+      <span class="ico">🧾</span> Timesheet
+    </div>
 
     <div class="sidebar-foot">v3.0 · Fingerprint HR</div>
   </aside>
@@ -161,6 +165,11 @@
           <div class="form-group" style="max-width:130px"><label>เวลาเข้างาน</label><input type="time" id="f-start-time" value="08:00"></div>
           <div class="form-group" style="max-width:130px"><label>ผ่อนผัน (นาที)</label><input type="number" id="f-grace" placeholder="15" min="0" max="120"></div>
           <div class="form-group" style="max-width:130px"><label>OUT หลังเวลา</label><input type="time" id="f-checkout-time" value="17:00"></div>
+          <div class="form-group" style="max-width:160px"><label>ประกันสังคม (หัก 5%)</label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text);padding-top:6px">
+              <input type="checkbox" id="f-sso" style="width:auto"> หักประกันสังคม
+            </label>
+          </div>
           <div class="form-group" style="max-width:110px;justify-content:flex-end"><label>&nbsp;</label><button class="btn btn-success" style="justify-content:center" onclick="saveUser()">💾 บันทึก</button></div>
         </div>
       </div>
@@ -203,10 +212,10 @@
         <div class="table-wrap">
           <table>
             <thead><tr>
-              <th>ชื่อ-สกุล / แผนก</th><th>วันที่มา</th><th>เข้าสาย</th><th>ฐานเดือน</th>
-              <th>เบี้ยขยัน</th><th>ค่าคอม</th><th>รวมทั้งหมด</th><th>จัดการ</th>
+              <th>ชื่อ-สกุล / แผนก</th><th>มา</th><th>สาย</th><th>ลา</th><th>ฐานเดือน</th>
+              <th>OT</th><th>เบี้ยขยัน</th><th>ค่าคอม</th><th>หัก</th><th>รวมสุทธิ</th><th>จัดการ</th>
             </tr></thead>
-            <tbody id="report-body"><tr><td colspan="8" class="muted" style="text-align:center;padding:20px">เลือกเดือนและปี แล้วกด "ดูรายงาน"</td></tr></tbody>
+            <tbody id="report-body"><tr><td colspan="11" class="muted" style="text-align:center;padding:20px">เลือกเดือนและปี แล้วกด "ดูรายงาน"</td></tr></tbody>
             <tfoot id="report-foot"></tfoot>
           </table>
         </div>
@@ -326,6 +335,118 @@
       </div>
     </div>
 
+    <!-- ===== LEAVE ===== -->
+    <div id="tab-leave" class="content hidden">
+      <div class="card">
+        <h2>➕ บันทึกการลา</h2>
+        <div id="leave-status" class="status"></div>
+        <div class="form-row">
+          <div class="form-group"><label>พนักงาน *</label><select id="l-emp"></select></div>
+          <div class="form-group" style="max-width:180px"><label>ประเภท *</label><select id="l-type"></select></div>
+          <div class="form-group" style="max-width:160px"><label>ตั้งแต่ *</label><input type="date" id="l-start"></div>
+          <div class="form-group" style="max-width:160px"><label>ถึง *</label><input type="date" id="l-end"></div>
+          <div class="form-group"><label>เหตุผล</label><input type="text" id="l-reason" placeholder="เช่น ป่วยเป็นไข้"></div>
+          <div class="form-group" style="max-width:110px;justify-content:flex-end"><label>&nbsp;</label><button class="btn btn-success" style="justify-content:center" onclick="saveLeave()">💾 บันทึก</button></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h2>📝 รายการลาปี <span id="leave-year-label"></span></h2>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="number" id="l-filter-year" style="width:100px" onchange="loadLeaveRequests()">
+            <button class="btn btn-primary" onclick="loadLeaveRequests()">🔄 รีเฟรช</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>พนักงาน</th><th>ประเภท</th><th>ช่วงวันที่</th><th>วัน</th><th>เหตุผล</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
+            <tbody id="leave-body"><tr><td colspan="7" class="muted" style="text-align:center;padding:20px">กำลังโหลด...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>📊 วันลาคงเหลือ</h2></div>
+        <div class="table-wrap"><table id="leave-balance-table">
+          <thead id="leave-balance-head"></thead>
+          <tbody id="leave-balance-body"></tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <h2>🏷️ ประเภทการลา</h2>
+        <div class="form-row">
+          <div class="form-group"><label>ชื่อประเภท</label><input type="text" id="lt-name" placeholder="เช่น ลาบวช"></div>
+          <div class="form-group" style="max-width:150px"><label>โควตา (วัน/ปี)</label><input type="number" id="lt-quota" value="0" min="0"></div>
+          <div class="form-group" style="max-width:160px"><label>ค่าจ้าง</label><select id="lt-paid"><option value="true">มีค่าจ้าง</option><option value="false">ไม่มีค่าจ้าง</option></select></div>
+          <div class="form-group" style="max-width:110px;justify-content:flex-end"><label>&nbsp;</label><button class="btn btn-success" style="justify-content:center" onclick="saveLeaveType()">➕ เพิ่ม</button></div>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>ประเภท</th><th>ค่าจ้าง</th><th>โควตา/ปี</th><th>จัดการ</th></tr></thead>
+          <tbody id="leave-types-body"></tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <!-- ===== OT ===== -->
+    <div id="tab-ot" class="content hidden">
+      <div class="card">
+        <h2>➕ บันทึกล่วงเวลา (OT)</h2>
+        <p class="muted" style="font-size:13px;margin-bottom:12px">ค่า OT = (ชั่วโมง × ค่าจ้างต่อชม.) × ตัวคูณ — ค่าจ้างต่อชม.คิดจาก ฐานเดือน ÷ 30 ÷ 8</p>
+        <div id="ot-status" class="status"></div>
+        <div class="form-row">
+          <div class="form-group"><label>พนักงาน *</label><select id="o-emp"></select></div>
+          <div class="form-group" style="max-width:160px"><label>วันที่ *</label><input type="date" id="o-date"></div>
+          <div class="form-group" style="max-width:140px"><label>จำนวน (ชม.) *</label><input type="number" id="o-hours" placeholder="2" min="0" step="0.5"></div>
+          <div class="form-group" style="max-width:130px"><label>ตัวคูณ</label><input type="number" id="o-mult" value="1.5" min="1" step="0.5"></div>
+          <div class="form-group"><label>เหตุผล</label><input type="text" id="o-reason" placeholder="เช่น งานเลี้ยงลูกค้า"></div>
+          <div class="form-group" style="max-width:110px;justify-content:flex-end"><label>&nbsp;</label><button class="btn btn-success" style="justify-content:center" onclick="saveOvertime()">💾 บันทึก</button></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h2>⏱️ รายการ OT</h2>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="o-filter-month"></select>
+            <input type="number" id="o-filter-year" style="width:100px" onchange="loadOvertime()">
+            <button class="btn btn-primary" onclick="loadOvertime()">🔄 รีเฟรช</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>พนักงาน</th><th>วันที่</th><th>ชั่วโมง</th><th>ตัวคูณ</th><th>เหตุผล</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
+            <tbody id="ot-body"><tr><td colspan="7" class="muted" style="text-align:center;padding:20px">กำลังโหลด...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== TIMESHEET ===== -->
+    <div id="tab-timesheet" class="content hidden">
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <h2 style="margin-bottom:0">🧾 Timesheet / ปิดงวด</h2>
+          <select id="t-month"></select>
+          <input type="number" id="t-year" style="width:90px">
+          <button class="btn btn-primary" onclick="loadTimesheet()">🔍 ตรวจสอบ</button>
+          <span id="t-status-badge"></span>
+        </div>
+        <div id="timesheet-status" class="status" style="margin-top:12px"></div>
+        <div style="margin-top:12px;display:flex;gap:8px">
+          <button class="btn btn-success" onclick="closeTimesheet()">🔒 ปิดงวด (Snapshot)</button>
+          <button class="btn btn-warning" onclick="reopenTimesheet()">🔓 เปิดงวดใหม่</button>
+        </div>
+        <p class="muted" style="font-size:13px;margin-top:10px">ปิดงวด = บันทึกสรุปเวลา/เงินเดือนของเดือนนั้นไว้ถาวร (snapshot) ก่อนนำไปจ่ายเงิน — แก้ไขภายหลังต้องเปิดงวดใหม่</p>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>⚠️ รายการที่ต้องตรวจ (ลืมสแกน)</h2><button class="btn btn-primary" onclick="loadExceptions()">🔄 รีเฟรช</button></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>พนักงาน</th><th>วันที่</th><th>ปัญหา</th><th>แก้ไข</th></tr></thead>
+            <tbody id="exceptions-body"><tr><td colspan="4" class="muted" style="text-align:center;padding:20px">เลือกเดือน แล้วกด "ตรวจสอบ"</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -379,6 +500,45 @@
     <p id="view-info" style="margin-bottom:16px"></p>
     <button class="btn btn-primary" onclick="document.getElementById('view-modal').classList.remove('show')">ปิด</button>
   </div>
+</div>
+
+<!-- Correction modal -->
+<div class="modal-bg" id="corr-modal">
+  <div class="modal" style="max-width:400px;text-align:left">
+    <h3 id="corr-title" style="text-align:center">แก้เวลา (เพิ่มการสแกน)</h3>
+    <p class="muted" style="font-size:12px;text-align:center;margin-bottom:16px">ไม่ลบข้อมูลสแกนเดิม — เพิ่มรายการแก้ไขแยกต่างหาก</p>
+    <input type="hidden" id="corr-fid">
+    <div class="form-group" style="margin-bottom:10px"><label>วันที่</label><input type="date" id="corr-date"></div>
+    <div class="form-row">
+      <div class="form-group"><label>ประเภท</label><select id="corr-type"><option value="IN">เข้างาน (IN)</option><option value="OUT">ออกงาน (OUT)</option></select></div>
+      <div class="form-group"><label>เวลา</label><input type="time" id="corr-time"></div>
+    </div>
+    <div class="form-group" style="margin:10px 0"><label>เหตุผล</label><input type="text" id="corr-reason" placeholder="เช่น ลืมสแกนออก"></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-success" style="flex:1;justify-content:center" onclick="saveCorrection()">💾 บันทึก</button>
+      <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="document.getElementById('corr-modal').classList.remove('show')">ยกเลิก</button>
+    </div>
+  </div>
+</div>
+
+<!-- Adjustment modal (เบิก/หัก) -->
+<div class="modal-bg" id="adj-modal">
+  <div class="modal" style="max-width:380px;text-align:left">
+    <h3 id="adj-title" style="text-align:center">เบิก / หัก รายเดือน</h3>
+    <input type="hidden" id="adj-fid">
+    <div class="form-group" style="margin:12px 0 8px"><label>เงินเบิก/เพิ่ม (บาท)</label><input type="number" id="adj-allowance" min="0" step="0.01" value="0"></div>
+    <div class="form-group" style="margin-bottom:8px"><label>เงินหัก (บาท)</label><input type="number" id="adj-deduction" min="0" step="0.01" value="0"></div>
+    <div class="form-group" style="margin-bottom:8px"><label>หมายเหตุ</label><input type="text" id="adj-note" placeholder="เช่น เบิกล่วงหน้า / หักค่าเสียหาย"></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-success" style="flex:1;justify-content:center" onclick="saveAdjustment()">💾 บันทึก</button>
+      <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="document.getElementById('adj-modal').classList.remove('show')">ยกเลิก</button>
+    </div>
+  </div>
+</div>
+
+<!-- Payslip modal -->
+<div class="modal-bg" id="payslip-modal">
+  <div class="modal" style="max-width:460px;width:96%;text-align:left" id="payslip-content"></div>
 </div>
 
 <script src="app.js"></script>

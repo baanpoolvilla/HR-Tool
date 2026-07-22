@@ -279,6 +279,87 @@ async function initDB() {
     );
   `);
 
+  // ===== Phase 3: ลา + OT =====
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS leave_types (
+      id                  SERIAL PRIMARY KEY,
+      name                VARCHAR(60) UNIQUE NOT NULL,
+      is_paid             BOOLEAN NOT NULL DEFAULT TRUE,
+      quota_days_per_year INTEGER NOT NULL DEFAULT 0,
+      active              BOOLEAN NOT NULL DEFAULT TRUE
+    );
+  `);
+  await pool.query(`
+    INSERT INTO leave_types (name, is_paid, quota_days_per_year) VALUES
+      ('ลาป่วย', TRUE, 30), ('ลากิจ', TRUE, 3), ('ลาพักร้อน', TRUE, 6), ('ลาไม่รับค่าจ้าง', FALSE, 0)
+    ON CONFLICT (name) DO NOTHING;
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS leave_requests (
+      id         SERIAL PRIMARY KEY,
+      finger_id  INTEGER NOT NULL,
+      type_id    INTEGER NOT NULL,
+      start_date DATE NOT NULL,
+      end_date   DATE NOT NULL,
+      days       NUMERIC(5,1) NOT NULL DEFAULT 1,
+      reason     TEXT DEFAULT '',
+      status     VARCHAR(10) NOT NULL DEFAULT 'APPROVED',
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS overtime_records (
+      id         SERIAL PRIMARY KEY,
+      finger_id  INTEGER NOT NULL,
+      work_date  DATE NOT NULL,
+      minutes    INTEGER NOT NULL DEFAULT 0,
+      multiplier NUMERIC(3,1) NOT NULL DEFAULT 1.5,
+      reason     TEXT DEFAULT '',
+      status     VARCHAR(10) NOT NULL DEFAULT 'APPROVED',
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  // ===== Phase 4: แก้เวลา + timesheet =====
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS attendance_corrections (
+      id           SERIAL PRIMARY KEY,
+      finger_id    INTEGER NOT NULL,
+      work_date    DATE NOT NULL,
+      type         VARCHAR(3) NOT NULL,
+      correct_time VARCHAR(8) NOT NULL,
+      reason       TEXT DEFAULT '',
+      created_at   TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS timesheets (
+      id         SERIAL PRIMARY KEY,
+      finger_id  INTEGER NOT NULL,
+      year       INTEGER NOT NULL,
+      month      INTEGER NOT NULL,
+      snapshot   JSONB,
+      status     VARCHAR(10) NOT NULL DEFAULT 'CLOSED',
+      closed_at  TIMESTAMP DEFAULT NOW(),
+      UNIQUE(finger_id, year, month)
+    );
+  `);
+
+  // ===== Phase 5: payroll เต็ม =====
+  await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS sso_enabled BOOLEAN DEFAULT FALSE;`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS monthly_adjustments (
+      id         SERIAL PRIMARY KEY,
+      finger_id  INTEGER NOT NULL,
+      year       INTEGER NOT NULL,
+      month      INTEGER NOT NULL,
+      allowance  NUMERIC(10,2) DEFAULT 0,
+      deduction  NUMERIC(10,2) DEFAULT 0,
+      note       TEXT DEFAULT '',
+      UNIQUE(finger_id, year, month)
+    );
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS audit_log (
       id         SERIAL PRIMARY KEY,
@@ -512,20 +593,22 @@ app.get('/api/users', requireAdmin, async (req, res) => {
 app.post('/api/users', requireAdmin, async (req, res) => {
   const { finger_id, name, employee_id, department,
           base_salary, attendance_bonus, work_start_time, late_grace_minutes,
-          checkout_start_time, shift_id } = req.body;
+          checkout_start_time, shift_id, sso_enabled } = req.body;
   await pool.query(`
     INSERT INTO fp_users
       (finger_id, name, employee_id, department, base_salary, attendance_bonus,
-       work_start_time, late_grace_minutes, checkout_start_time, shift_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       work_start_time, late_grace_minutes, checkout_start_time, shift_id, sso_enabled)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
     ON CONFLICT (finger_id) DO UPDATE SET
       name=$2, employee_id=$3, department=$4,
       base_salary=$5, attendance_bonus=$6,
-      work_start_time=$7, late_grace_minutes=$8, checkout_start_time=$9, shift_id=$10
+      work_start_time=$7, late_grace_minutes=$8, checkout_start_time=$9,
+      shift_id=$10, sso_enabled=$11
   `, [finger_id, name, employee_id, department,
       base_salary || 0, attendance_bonus || 0,
       work_start_time || '08:00', late_grace_minutes || 15,
-      checkout_start_time || '17:00', shift_id ? parseInt(shift_id) : null]);
+      checkout_start_time || '17:00', shift_id ? parseInt(shift_id) : null,
+      sso_enabled === true || sso_enabled === 'true']);
   await logAudit('user_upsert', finger_id, { name, employee_id, department }, req);
   res.json({ success: true });
 });
@@ -594,6 +677,238 @@ app.post('/api/holidays', requireAdmin, async (req, res) => {
 app.delete('/api/holidays/:id', requireAdmin, async (req, res) => {
   await pool.query('DELETE FROM holidays WHERE id = $1', [req.params.id]);
   await logAudit('holiday_delete', req.params.id, {}, req);
+  res.json({ success: true });
+});
+
+// ===== Phase 3: Leave types =====
+app.get('/api/leave-types', requireAdmin, async (req, res) => {
+  const r = await pool.query('SELECT * FROM leave_types ORDER BY id');
+  res.json(r.rows);
+});
+app.post('/api/leave-types', requireAdmin, async (req, res) => {
+  const { id, name, is_paid, quota_days_per_year, active } = req.body;
+  if (!name) return res.status(400).json({ error: 'missing_name' });
+  if (id) {
+    await pool.query('UPDATE leave_types SET name=$2, is_paid=$3, quota_days_per_year=$4, active=$5 WHERE id=$1',
+      [id, name, is_paid !== false, parseInt(quota_days_per_year) || 0, active !== false]);
+  } else {
+    await pool.query('INSERT INTO leave_types (name, is_paid, quota_days_per_year) VALUES ($1,$2,$3) ON CONFLICT (name) DO UPDATE SET is_paid=$2, quota_days_per_year=$3',
+      [name, is_paid !== false, parseInt(quota_days_per_year) || 0]);
+  }
+  await logAudit('leave_type_upsert', name, {}, req);
+  res.json({ success: true });
+});
+app.delete('/api/leave-types/:id', requireAdmin, async (req, res) => {
+  await pool.query('DELETE FROM leave_types WHERE id = $1', [req.params.id]);
+  res.json({ success: true });
+});
+
+// ===== Phase 3: Leave requests =====
+app.get('/api/leave-requests', requireAdmin, async (req, res) => {
+  const year  = parseInt(req.query.year)  || new Date().getFullYear();
+  const r = await pool.query(
+    `SELECT lr.id, lr.finger_id, u.name, lr.type_id, lt.name AS type_name, lt.is_paid,
+            to_char(lr.start_date,'YYYY-MM-DD') AS start_date,
+            to_char(lr.end_date,'YYYY-MM-DD')   AS end_date,
+            lr.days, lr.reason, lr.status
+     FROM leave_requests lr
+     LEFT JOIN fp_users u   ON u.finger_id = lr.finger_id
+     LEFT JOIN leave_types lt ON lt.id = lr.type_id
+     WHERE EXTRACT(YEAR FROM lr.start_date) = $1
+     ORDER BY lr.start_date DESC`, [year]);
+  res.json(r.rows);
+});
+app.post('/api/leave-requests', requireAdmin, async (req, res) => {
+  const { finger_id, type_id, start_date, end_date, reason, status } = req.body;
+  if (!finger_id || !type_id || !start_date || !end_date) return res.status(400).json({ error: 'missing_fields' });
+  // นับจำนวนวัน (รวมวันเริ่ม-สิ้นสุด)
+  const days = Math.max(1, Math.round((new Date(end_date) - new Date(start_date)) / 86400000) + 1);
+  await pool.query(
+    `INSERT INTO leave_requests (finger_id, type_id, start_date, end_date, days, reason, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [finger_id, type_id, start_date, end_date, days, reason || '', status || 'APPROVED']);
+  await logAudit('leave_create', finger_id, { type_id, start_date, end_date, days }, req);
+  res.json({ success: true, days });
+});
+app.post('/api/leave-requests/:id/status', requireAdmin, async (req, res) => {
+  const { status } = req.body;
+  await pool.query('UPDATE leave_requests SET status=$2 WHERE id=$1', [req.params.id, status]);
+  await logAudit('leave_status', req.params.id, { status }, req);
+  res.json({ success: true });
+});
+app.delete('/api/leave-requests/:id', requireAdmin, async (req, res) => {
+  await pool.query('DELETE FROM leave_requests WHERE id = $1', [req.params.id]);
+  res.json({ success: true });
+});
+
+// ===== Phase 3: Leave balance (quota - approved days) per employee/type/year =====
+app.get('/api/leave-balance', requireAdmin, async (req, res) => {
+  const year = parseInt(req.query.year) || new Date().getFullYear();
+  const [usersR, typesR, usedR] = await Promise.all([
+    pool.query('SELECT finger_id, name FROM fp_users ORDER BY finger_id'),
+    pool.query('SELECT * FROM leave_types WHERE active = TRUE ORDER BY id'),
+    pool.query(
+      `SELECT finger_id, type_id, COALESCE(SUM(days),0) AS used
+       FROM leave_requests
+       WHERE status = 'APPROVED' AND EXTRACT(YEAR FROM start_date) = $1
+       GROUP BY finger_id, type_id`, [year]),
+  ]);
+  const usedMap = {};
+  usedR.rows.forEach(u => { usedMap[`${u.finger_id}_${u.type_id}`] = parseFloat(u.used); });
+  const balance = usersR.rows.map(u => ({
+    finger_id: u.finger_id, name: u.name,
+    types: typesR.rows.map(t => {
+      const used = usedMap[`${u.finger_id}_${t.id}`] || 0;
+      return { type_id: t.id, type_name: t.name, is_paid: t.is_paid,
+               quota: t.quota_days_per_year, used, remaining: t.quota_days_per_year - used };
+    })
+  }));
+  res.json({ year, types: typesR.rows, balance });
+});
+
+// ===== Phase 3: Overtime =====
+app.get('/api/overtime', requireAdmin, async (req, res) => {
+  const year  = parseInt(req.query.year)  || new Date().getFullYear();
+  const month = parseInt(req.query.month);
+  const params = [year];
+  let sql = `SELECT ot.id, ot.finger_id, u.name, to_char(ot.work_date,'YYYY-MM-DD') AS work_date,
+                    ot.minutes, ot.multiplier, ot.reason, ot.status
+             FROM overtime_records ot LEFT JOIN fp_users u ON u.finger_id = ot.finger_id
+             WHERE EXTRACT(YEAR FROM ot.work_date) = $1`;
+  if (month) { sql += ` AND EXTRACT(MONTH FROM ot.work_date) = $2`; params.push(month); }
+  sql += ` ORDER BY ot.work_date DESC`;
+  const r = await pool.query(sql, params);
+  res.json(r.rows);
+});
+app.post('/api/overtime', requireAdmin, async (req, res) => {
+  const { finger_id, work_date, minutes, multiplier, reason, status } = req.body;
+  if (!finger_id || !work_date || !minutes) return res.status(400).json({ error: 'missing_fields' });
+  await pool.query(
+    `INSERT INTO overtime_records (finger_id, work_date, minutes, multiplier, reason, status)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [finger_id, work_date, parseInt(minutes), parseFloat(multiplier) || 1.5, reason || '', status || 'APPROVED']);
+  await logAudit('overtime_create', finger_id, { work_date, minutes }, req);
+  res.json({ success: true });
+});
+app.post('/api/overtime/:id/status', requireAdmin, async (req, res) => {
+  await pool.query('UPDATE overtime_records SET status=$2 WHERE id=$1', [req.params.id, req.body.status]);
+  res.json({ success: true });
+});
+app.delete('/api/overtime/:id', requireAdmin, async (req, res) => {
+  await pool.query('DELETE FROM overtime_records WHERE id = $1', [req.params.id]);
+  res.json({ success: true });
+});
+
+// ===== Phase 4: Attendance corrections =====
+app.get('/api/corrections', requireAdmin, async (req, res) => {
+  const year  = parseInt(req.query.year)  || new Date().getFullYear();
+  const month = parseInt(req.query.month);
+  const params = [year];
+  let sql = `SELECT c.id, c.finger_id, u.name, to_char(c.work_date,'YYYY-MM-DD') AS work_date,
+                    c.type, c.correct_time, c.reason
+             FROM attendance_corrections c LEFT JOIN fp_users u ON u.finger_id = c.finger_id
+             WHERE EXTRACT(YEAR FROM c.work_date) = $1`;
+  if (month) { sql += ` AND EXTRACT(MONTH FROM c.work_date) = $2`; params.push(month); }
+  sql += ` ORDER BY c.work_date DESC`;
+  const r = await pool.query(sql, params);
+  res.json(r.rows);
+});
+app.post('/api/corrections', requireAdmin, async (req, res) => {
+  const { finger_id, work_date, type, correct_time, reason } = req.body;
+  if (!finger_id || !work_date || !type || !correct_time) return res.status(400).json({ error: 'missing_fields' });
+  await pool.query(
+    `INSERT INTO attendance_corrections (finger_id, work_date, type, correct_time, reason)
+     VALUES ($1,$2,$3,$4,$5)`,
+    [finger_id, work_date, type, correct_time, reason || '']);
+  await logAudit('correction_add', finger_id, { work_date, type, correct_time }, req);
+  res.json({ success: true });
+});
+app.delete('/api/corrections/:id', requireAdmin, async (req, res) => {
+  await pool.query('DELETE FROM attendance_corrections WHERE id = $1', [req.params.id]);
+  res.json({ success: true });
+});
+
+// ===== Phase 4: Exceptions inbox (คำนวณสด — วันที่มี IN ไม่มี OUT ฯลฯ) =====
+app.get('/api/exceptions', requireAdmin, async (req, res) => {
+  const year  = parseInt(req.query.year)  || new Date().getFullYear();
+  const month = parseInt(req.query.month) || (new Date().getMonth() + 1);
+
+  const [logsRes, corrRes, usersRes] = await Promise.all([
+    pool.query(
+      `SELECT finger_id, name, check_type, check_time FROM attendance_logs
+       WHERE EXTRACT(YEAR FROM check_time)=$1 AND EXTRACT(MONTH FROM check_time)=$2
+       ORDER BY check_time ASC`, [year, month]),
+    pool.query(
+      `SELECT finger_id, to_char(work_date,'YYYY-MM-DD') AS d, type FROM attendance_corrections
+       WHERE EXTRACT(YEAR FROM work_date)=$1 AND EXTRACT(MONTH FROM work_date)=$2`, [year, month]),
+    pool.query('SELECT finger_id, name FROM fp_users'),
+  ]);
+
+  const nameMap = {}; usersRes.rows.forEach(u => nameMap[u.finger_id] = u.name);
+  // key finger_id|date -> {in, out}
+  const day = {};
+  logsRes.rows.forEach(l => {
+    const th = toTH(l.check_time); const d = th.toISOString().split('T')[0];
+    const k = `${l.finger_id}|${d}`;
+    if (!day[k]) day[k] = { finger_id: l.finger_id, date: d, in: 0, out: 0 };
+    if (l.check_type === 'IN') day[k].in++; else day[k].out++;
+  });
+  corrRes.rows.forEach(c => {
+    const k = `${c.finger_id}|${c.d}`;
+    if (!day[k]) day[k] = { finger_id: c.finger_id, date: c.d, in: 0, out: 0 };
+    if (c.type === 'IN') day[k].in++; else day[k].out++;
+  });
+
+  const today = toTH(new Date()).toISOString().split('T')[0];
+  const exceptions = [];
+  Object.values(day).forEach(v => {
+    if (v.date >= today) return; // ยังไม่จบวัน ไม่นับ
+    if (v.in > 0 && v.out === 0)  exceptions.push({ ...v, code: 'MISSING_OUT', name: nameMap[v.finger_id] });
+    else if (v.in === 0 && v.out > 0) exceptions.push({ ...v, code: 'MISSING_IN', name: nameMap[v.finger_id] });
+  });
+  exceptions.sort((a, b) => b.date.localeCompare(a.date));
+  res.json({ year, month, exceptions });
+});
+
+// ===== Phase 5: Monthly adjustments (เบิก/หัก รายเดือน) =====
+app.post('/api/adjustment', requireAdmin, async (req, res) => {
+  const { finger_id, year, month, allowance, deduction, note } = req.body;
+  await pool.query(
+    `INSERT INTO monthly_adjustments (finger_id, year, month, allowance, deduction, note)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (finger_id, year, month) DO UPDATE SET allowance=$4, deduction=$5, note=$6`,
+    [finger_id, year, month, allowance || 0, deduction || 0, note || '']);
+  await logAudit('adjustment_upsert', finger_id, { year, month, allowance, deduction }, req);
+  res.json({ success: true });
+});
+
+// ===== Phase 4: Timesheets (ปิดงวด snapshot) =====
+app.get('/api/timesheets', requireAdmin, async (req, res) => {
+  const year  = parseInt(req.query.year)  || new Date().getFullYear();
+  const month = parseInt(req.query.month) || (new Date().getMonth() + 1);
+  const r = await pool.query(
+    `SELECT t.finger_id, u.name, t.status, t.closed_at
+     FROM timesheets t LEFT JOIN fp_users u ON u.finger_id = t.finger_id
+     WHERE t.year=$1 AND t.month=$2 ORDER BY t.finger_id`, [year, month]);
+  res.json({ year, month, closed: r.rows.length > 0, rows: r.rows });
+});
+app.post('/api/timesheets/close', requireAdmin, async (req, res) => {
+  const { year, month, report } = req.body; // report = array snapshot จาก frontend
+  if (!year || !month || !Array.isArray(report)) return res.status(400).json({ error: 'missing_fields' });
+  for (const row of report) {
+    await pool.query(
+      `INSERT INTO timesheets (finger_id, year, month, snapshot, status, closed_at)
+       VALUES ($1,$2,$3,$4,'CLOSED',NOW())
+       ON CONFLICT (finger_id, year, month) DO UPDATE SET snapshot=$4, status='CLOSED', closed_at=NOW()`,
+      [row.finger_id, year, month, JSON.stringify(row)]);
+  }
+  await logAudit('timesheet_close', `${year}-${month}`, { count: report.length }, req);
+  res.json({ success: true });
+});
+app.post('/api/timesheets/reopen', requireAdmin, async (req, res) => {
+  const { year, month } = req.body;
+  await pool.query('DELETE FROM timesheets WHERE year=$1 AND month=$2', [year, month]);
+  await logAudit('timesheet_reopen', `${year}-${month}`, {}, req);
   res.json({ success: true });
 });
 
@@ -671,7 +986,12 @@ app.get('/api/report', requireAdmin, async (req, res) => {
   const year  = parseInt(req.query.year)  || new Date().getFullYear();
   const month = parseInt(req.query.month) || (new Date().getMonth() + 1);
 
-  const [usersRes, logsRes, commRes] = await Promise.all([
+  const pad = n => String(n).padStart(2, '0');
+  const lastDay    = new Date(year, month, 0).getDate();
+  const monthStart = `${year}-${pad(month)}-01`;
+  const monthEnd   = `${year}-${pad(month)}-${pad(lastDay)}`;
+
+  const [usersRes, logsRes, commRes, corrRes, leaveRes, otRes, adjRes] = await Promise.all([
     pool.query(
       `SELECT u.*, s.start_time AS shift_start, s.end_time AS shift_end
        FROM fp_users u
@@ -688,13 +1008,35 @@ app.get('/api/report', requireAdmin, async (req, res) => {
       `SELECT finger_id, commission_amount, notes FROM monthly_commissions
        WHERE year = $1 AND month = $2`,
       [year, month]
-    )
+    ),
+    pool.query(
+      `SELECT finger_id, to_char(work_date,'YYYY-MM-DD') AS d, type, correct_time
+       FROM attendance_corrections
+       WHERE EXTRACT(YEAR FROM work_date) = $1 AND EXTRACT(MONTH FROM work_date) = $2`,
+      [year, month]
+    ),
+    pool.query(
+      `SELECT lr.finger_id, lt.is_paid,
+              to_char(lr.start_date,'YYYY-MM-DD') AS s, to_char(lr.end_date,'YYYY-MM-DD') AS e
+       FROM leave_requests lr JOIN leave_types lt ON lt.id = lr.type_id
+       WHERE lr.status = 'APPROVED' AND lr.start_date <= $2::date AND lr.end_date >= $1::date`,
+      [monthStart, monthEnd]
+    ),
+    pool.query(
+      `SELECT finger_id, minutes, multiplier FROM overtime_records
+       WHERE status = 'APPROVED' AND EXTRACT(YEAR FROM work_date) = $1 AND EXTRACT(MONTH FROM work_date) = $2`,
+      [year, month]
+    ),
+    pool.query(
+      `SELECT finger_id, allowance, deduction, note FROM monthly_adjustments
+       WHERE year = $1 AND month = $2`, [year, month]
+    ),
   ]);
 
-  const commMap = {};
-  commRes.rows.forEach(c => { commMap[c.finger_id] = c; });
+  const commMap = {}; commRes.rows.forEach(c => { commMap[c.finger_id] = c; });
+  const adjMap  = {}; adjRes.rows.forEach(a => { adjMap[a.finger_id] = a; });
 
-  // group by finger_id → Bangkok date string
+  // group logs by finger_id → Bangkok date string
   const logsByUser = {};
   logsRes.rows.forEach(log => {
     const fid = log.finger_id;
@@ -703,6 +1045,36 @@ app.get('/api/report', requireAdmin, async (req, res) => {
     const date = th.toISOString().split('T')[0];
     if (!logsByUser[fid][date]) logsByUser[fid][date] = [];
     logsByUser[fid][date].push({ type: log.check_type, time: th });
+  });
+  // merge corrections as synthetic punches (raw logs stay untouched)
+  corrRes.rows.forEach(c => {
+    if (!logsByUser[c.finger_id]) logsByUser[c.finger_id] = {};
+    if (!logsByUser[c.finger_id][c.d]) logsByUser[c.finger_id][c.d] = [];
+    const [Y, M, D] = c.d.split('-').map(Number);
+    const [hh, mi]  = c.correct_time.split(':').map(Number);
+    logsByUser[c.finger_id][c.d].push({
+      type: c.type, corrected: true,
+      time: new Date(Date.UTC(Y, M - 1, D, hh || 0, mi || 0)),
+    });
+  });
+
+  // leave days within the month, split paid/unpaid, per user
+  const leaveMap = {};
+  leaveRes.rows.forEach(l => {
+    const a = l.s > monthStart ? l.s : monthStart;
+    const b = l.e < monthEnd   ? l.e : monthEnd;
+    if (a > b) return;
+    const days = Math.round((new Date(b) - new Date(a)) / 86400000) + 1;
+    if (!leaveMap[l.finger_id]) leaveMap[l.finger_id] = { paid: 0, unpaid: 0 };
+    if (l.is_paid) leaveMap[l.finger_id].paid += days; else leaveMap[l.finger_id].unpaid += days;
+  });
+
+  // OT per user: raw minutes + weighted minutes (Σ minutes*multiplier)
+  const otMap = {};
+  otRes.rows.forEach(o => {
+    if (!otMap[o.finger_id]) otMap[o.finger_id] = { minutes: 0, weighted: 0 };
+    otMap[o.finger_id].minutes  += o.minutes;
+    otMap[o.finger_id].weighted += o.minutes * parseFloat(o.multiplier);
   });
 
   const report = usersRes.rows.map(u => {
@@ -716,6 +1088,7 @@ app.get('/api/report', requireAdmin, async (req, res) => {
     const daily_records = [];
 
     Object.entries(userLogs).sort().forEach(([date, dayLogs]) => {
+      dayLogs.sort((a, b) => a.time - b.time);
       const inLogs  = dayLogs.filter(l => l.type === 'IN');
       const outLogs = dayLogs.filter(l => l.type === 'OUT');
       if (inLogs.length === 0) return;
@@ -735,25 +1108,54 @@ app.get('/api/report', requireAdmin, async (req, res) => {
         last_out:     lastOut ? lastOut.toISOString() : null,
         is_late:      isLate,
         late_minutes: isLate ? inMin - startMin - grace : 0,
-        work_hours
+        work_hours,
+        corrected:    dayLogs.some(l => l.corrected),
       });
     });
 
+    const base         = parseFloat(u.base_salary || 0);
     const commission   = parseFloat(commMap[u.finger_id]?.commission_amount || 0);
-    const bonus_earned = (days_late === 0 && days_present > 0)
-      ? parseFloat(u.attendance_bonus || 0) : 0;
-    const total_pay = parseFloat(u.base_salary || 0) + bonus_earned + commission;
+    const bonus_earned = (days_late === 0 && days_present > 0) ? parseFloat(u.attendance_bonus || 0) : 0;
+
+    // OT pay: (weighted minutes / 60) × hourly rate (base/30/8)
+    const hourlyRate  = base > 0 ? base / 30 / 8 : 0;
+    const ot          = otMap[u.finger_id] || { minutes: 0, weighted: 0 };
+    const ot_minutes  = ot.minutes;
+    const ot_pay      = +(ot.weighted / 60 * hourlyRate).toFixed(2);
+
+    const lv               = leaveMap[u.finger_id] || { paid: 0, unpaid: 0 };
+    const paid_leave_days  = lv.paid;
+    const unpaid_leave_days = lv.unpaid;
+    const unpaid_leave_deduction = +(unpaid_leave_days * (base / 30)).toFixed(2);
+
+    const sso = (u.sso_enabled) ? Math.min(Math.round(base * 0.05), 750) : 0;
+
+    const adj        = adjMap[u.finger_id] || {};
+    const allowance  = parseFloat(adj.allowance || 0);
+    const deduction  = parseFloat(adj.deduction || 0);
+    const adj_note   = adj.note || '';
+
+    const gross_pay       = +(base + bonus_earned + commission + ot_pay + allowance).toFixed(2);
+    const total_deduction = +(sso + unpaid_leave_deduction + deduction).toFixed(2);
+    const net_pay         = +(gross_pay - total_deduction).toFixed(2);
 
     return {
       finger_id: u.finger_id, name: u.name,
       employee_id: u.employee_id, department: u.department,
-      base_salary:       parseFloat(u.base_salary || 0),
+      base_salary: base,
       attendance_bonus:  parseFloat(u.attendance_bonus || 0),
       work_start_time:   effStart,
       late_grace_minutes: grace,
-      days_present, days_late, commission,
-      commission_notes: commMap[u.finger_id]?.notes || '',
-      bonus_earned, total_pay, daily_records
+      days_present, days_late,
+      commission, commission_notes: commMap[u.finger_id]?.notes || '',
+      bonus_earned,
+      ot_minutes, ot_pay,
+      paid_leave_days, unpaid_leave_days, unpaid_leave_deduction,
+      sso_enabled: !!u.sso_enabled, sso,
+      allowance, deduction, adj_note,
+      gross_pay, total_deduction, net_pay,
+      total_pay: net_pay, // backward compat
+      daily_records,
     };
   });
 
