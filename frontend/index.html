@@ -5,305 +5,279 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ระบบลงเวลา</title>
   <link rel="stylesheet" href="style.css">
-  <style>
-    @media print {
-      .header, .tabs, #tab-logs, #tab-users, #tab-report .card:first-child,
-      #report-summary, .btn { display: none !important; }
-      #tab-report { display: block !important; }
-      body { background: white; }
-    }
-  </style>
 </head>
 <body>
 
+<!-- ================= LOGIN ================= -->
 <div id="login-screen" class="login-screen">
   <div class="login-box">
-    <div style="font-size:40px;margin-bottom:8px">👆</div>
+    <div class="login-logo">👆</div>
     <h2>เข้าสู่ระบบ</h2>
-    <p style="color:#888;font-size:13px;margin-bottom:16px">ระบบลงเวลาทำงาน — สำหรับผู้ดูแลระบบ</p>
+    <p class="muted" style="font-size:13px;margin-bottom:16px">ระบบลงเวลาทำงาน — สำหรับผู้ดูแลระบบ</p>
     <input type="password" id="login-password" placeholder="รหัสผ่าน"
-           style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;margin-bottom:10px"
-           onkeydown="if(event.key==='Enter') login()">
+           style="width:100%;margin-bottom:10px" onkeydown="if(event.key==='Enter') login()">
     <div id="login-status" class="status"></div>
-    <button class="btn btn-success" style="width:100%;margin-top:8px" onclick="login()">เข้าสู่ระบบ</button>
+    <button class="btn btn-success" style="width:100%;justify-content:center;margin-top:6px" onclick="login()">เข้าสู่ระบบ</button>
   </div>
 </div>
 
-<div id="app-shell" class="hidden">
+<!-- ================= APP ================= -->
+<div id="app-shell" class="app-shell hidden">
 
-<div class="header">
-  <span style="font-size:28px">👆</span>
-  <div style="flex:1">
-    <h1>ระบบลงเวลาทำงาน</h1>
-    <div style="font-size:12px;opacity:0.8">Fingerprint Attendance System</div>
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <span class="logo">👆</span>
+      <div>
+        <h1>ระบบลงเวลา</h1>
+        <span>Attendance System</span>
+      </div>
+    </div>
+
+    <div class="nav-item active" data-page="dashboard" onclick="showPage('dashboard', this)">
+      <span class="ico">🏠</span> ภาพรวม
+    </div>
+    <div class="nav-item" data-page="logs" onclick="showPage('logs', this)">
+      <span class="ico">📋</span> บันทึกเวลา
+    </div>
+    <div class="nav-item" data-page="users" onclick="showPage('users', this)">
+      <span class="ico">👥</span> พนักงาน
+    </div>
+    <div class="nav-item" data-page="report" onclick="showPage('report', this)">
+      <span class="ico">📊</span> รายงาน & เงินเดือน
+    </div>
+    <div class="nav-item" data-page="config" onclick="showPage('config', this)">
+      <span class="ico">⚙️</span> ตั้งค่าระบบ
+    </div>
+
+    <div class="nav-group-label">เร็วๆ นี้</div>
+    <div class="nav-item disabled"><span class="ico">📅</span> กะ / ตารางเวร <span class="nav-soon">SOON</span></div>
+    <div class="nav-item disabled"><span class="ico">🌴</span> วันหยุด <span class="nav-soon">SOON</span></div>
+    <div class="nav-item disabled"><span class="ico">📝</span> การลา <span class="nav-soon">SOON</span></div>
+    <div class="nav-item disabled"><span class="ico">⏱️</span> ล่วงเวลา (OT) <span class="nav-soon">SOON</span></div>
+    <div class="nav-item disabled"><span class="ico">🧾</span> Timesheet <span class="nav-soon">SOON</span></div>
+
+    <div class="sidebar-foot">v3.0 · Fingerprint HR</div>
+  </aside>
+
+  <div class="scrim" id="scrim" onclick="closeSidebar()"></div>
+
+  <!-- Main -->
+  <div class="main">
+    <header class="topbar">
+      <button class="hamburger" onclick="openSidebar()">☰</button>
+      <h2 id="page-title">ภาพรวม</h2>
+      <div class="spacer"></div>
+      <button class="icon-btn" id="theme-btn" onclick="toggleTheme()" title="สลับธีม">🌙</button>
+      <button class="btn btn-ghost" onclick="logout()">ออกจากระบบ</button>
+    </header>
+
+    <!-- ===== DASHBOARD ===== -->
+    <div id="tab-dashboard" class="content">
+      <div class="stats">
+        <div class="stat">
+          <div class="stat-ico green">✅</div>
+          <div><div class="stat-num" id="dash-present">0</div><div class="stat-label">เข้างานวันนี้</div></div>
+        </div>
+        <div class="stat">
+          <div class="stat-ico red">⏰</div>
+          <div><div class="stat-num" id="dash-late">0</div><div class="stat-label">มาสายวันนี้</div></div>
+        </div>
+        <div class="stat">
+          <div class="stat-ico amber">🚫</div>
+          <div><div class="stat-num" id="dash-absent">0</div><div class="stat-label">ยังไม่เข้างาน</div></div>
+        </div>
+        <div class="stat">
+          <div class="stat-ico blue">👥</div>
+          <div><div class="stat-num" id="dash-registered">0</div><div class="stat-label">พนักงานทั้งหมด</div></div>
+        </div>
+      </div>
+
+      <div class="dash-grid">
+        <div class="card">
+          <div class="card-head">
+            <h2>🕐 การสแกนล่าสุดวันนี้</h2>
+            <button class="btn btn-ghost" onclick="loadDashboard()">🔄 รีเฟรช</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>ชื่อ</th><th>เวลา</th><th>ประเภท</th><th>สถานะ</th></tr></thead>
+              <tbody id="dash-recent"><tr><td colspan="4" class="muted" style="text-align:center;padding:20px">กำลังโหลด...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>👋 เข้างานแล้ววันนี้</h2></div>
+          <div class="people-list" id="dash-present-list">
+            <div class="muted" style="text-align:center;padding:20px">กำลังโหลด...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== LOGS ===== -->
+    <div id="tab-logs" class="content hidden">
+      <div class="stats" style="grid-template-columns:repeat(3,1fr)">
+        <div class="stat"><div class="stat-ico green">✅</div><div><div class="stat-num" id="stat-today">0</div><div class="stat-label">เข้างานวันนี้</div></div></div>
+        <div class="stat"><div class="stat-ico blue">📋</div><div><div class="stat-num" id="stat-total">0</div><div class="stat-label">รายการทั้งหมด</div></div></div>
+        <div class="stat"><div class="stat-ico amber">👥</div><div><div class="stat-num" id="stat-users">0</div><div class="stat-label">พนักงานที่ลงทะเบียน</div></div></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h2>📋 บันทึกเวลาล่าสุด</h2>
+          <button class="btn btn-primary" onclick="loadLogs()">🔄 รีเฟรช</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>ชื่อ</th><th>Finger ID</th><th>อุปกรณ์</th><th>เวลา</th><th>ประเภท</th><th>สถานะ</th></tr></thead>
+            <tbody id="logs-body"><tr><td colspan="7" class="muted" style="text-align:center;padding:20px">กำลังโหลด...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== USERS ===== -->
+    <div id="tab-users" class="content hidden">
+      <div class="card">
+        <h2>➕ เพิ่ม / แก้ไข พนักงาน</h2>
+        <div id="user-status" class="status"></div>
+        <div class="form-row">
+          <div class="form-group" style="max-width:100px"><label>Finger ID *</label><input type="number" id="f-finger-id" placeholder="1" min="1" max="127"></div>
+          <div class="form-group"><label>ชื่อ-นามสกุล *</label><input type="text" id="f-name" placeholder="สมชาย ใจดี"></div>
+          <div class="form-group" style="max-width:140px"><label>รหัสพนักงาน</label><input type="text" id="f-emp-id" placeholder="EMP001"></div>
+          <div class="form-group" style="max-width:150px"><label>แผนก</label><input type="text" id="f-dept" placeholder="แผนกบริการ"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group" style="max-width:140px"><label>ฐานเดือน (บาท)</label><input type="number" id="f-salary" placeholder="0" min="0" step="100"></div>
+          <div class="form-group" style="max-width:140px"><label>เบี้ยขยัน (บาท)</label><input type="number" id="f-bonus" placeholder="0" min="0" step="100"></div>
+          <div class="form-group" style="max-width:130px"><label>เวลาเข้างาน</label><input type="time" id="f-start-time" value="08:00"></div>
+          <div class="form-group" style="max-width:130px"><label>ผ่อนผัน (นาที)</label><input type="number" id="f-grace" placeholder="15" min="0" max="120"></div>
+          <div class="form-group" style="max-width:130px"><label>OUT หลังเวลา</label><input type="time" id="f-checkout-time" value="17:00"></div>
+          <div class="form-group" style="max-width:110px;justify-content:flex-end"><label>&nbsp;</label><button class="btn btn-success" style="justify-content:center" onclick="saveUser()">💾 บันทึก</button></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h2>👥 รายชื่อพนักงาน</h2>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-primary" onclick="loadUsers()">🔄 รีเฟรช</button>
+            <button class="btn btn-warning" onclick="clearSensor()">🖐️ ล้างนิ้วในเครื่อง</button>
+            <button class="btn btn-danger" onclick="resetAllData()">🗑️ ล้างข้อมูลทั้งหมด</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Finger ID</th><th>ลายนิ้วมือ</th><th>ชื่อ-นามสกุล</th><th>รหัสพนักงาน</th><th>แผนก</th><th>สถานะนิ้ว</th><th>จัดการ</th></tr></thead>
+            <tbody id="users-body"><tr><td colspan="7" class="muted" style="text-align:center;padding:20px">กำลังโหลด...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== REPORT ===== -->
+    <div id="tab-report" class="content hidden">
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <h2 style="margin-bottom:0">📊 รายงานเงินเดือน</h2>
+          <select id="r-month">
+            <option value="1">มกราคม</option><option value="2">กุมภาพันธ์</option><option value="3">มีนาคม</option>
+            <option value="4">เมษายน</option><option value="5">พฤษภาคม</option><option value="6">มิถุนายน</option>
+            <option value="7">กรกฎาคม</option><option value="8">สิงหาคม</option><option value="9">กันยายน</option>
+            <option value="10">ตุลาคม</option><option value="11">พฤศจิกายน</option><option value="12">ธันวาคม</option>
+          </select>
+          <input type="number" id="r-year" style="width:90px">
+          <button class="btn btn-primary" onclick="loadReport()">🔍 ดูรายงาน</button>
+          <button class="btn btn-warning" onclick="window.print()">🖨️ พิมพ์</button>
+        </div>
+      </div>
+      <div id="report-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:4px"></div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>ชื่อ-สกุล / แผนก</th><th>วันที่มา</th><th>เข้าสาย</th><th>ฐานเดือน</th>
+              <th>เบี้ยขยัน</th><th>ค่าคอม</th><th>รวมทั้งหมด</th><th>จัดการ</th>
+            </tr></thead>
+            <tbody id="report-body"><tr><td colspan="8" class="muted" style="text-align:center;padding:20px">เลือกเดือนและปี แล้วกด "ดูรายงาน"</td></tr></tbody>
+            <tfoot id="report-foot"></tfoot>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== CONFIG ===== -->
+    <div id="tab-config" class="content hidden">
+      <div class="card">
+        <h2>⚙️ ค่าเริ่มต้นสำหรับพนักงานใหม่</h2>
+        <p class="muted" style="font-size:13px;margin-bottom:12px">กรอกอัตโนมัติทุกครั้งที่เปิดหน้าเพิ่มพนักงาน</p>
+        <div id="config-status" class="status"></div>
+        <div class="form-row">
+          <div class="form-group" style="max-width:130px"><label>เวลาเข้างาน</label><input type="time" id="cfg-work-start" value="08:00"></div>
+          <div class="form-group" style="max-width:130px"><label>OUT หลังเวลา</label><input type="time" id="cfg-checkout" value="17:00"></div>
+          <div class="form-group" style="max-width:130px"><label>ผ่อนผัน (นาที)</label><input type="number" id="cfg-grace" placeholder="15" min="0" max="120"></div>
+          <div class="form-group" style="max-width:140px"><label>ฐานเดือน (บาท)</label><input type="number" id="cfg-salary" placeholder="0" min="0" step="100"></div>
+          <div class="form-group" style="max-width:140px"><label>เบี้ยขยัน (บาท)</label><input type="number" id="cfg-bonus" placeholder="0" min="0" step="100"></div>
+          <div class="form-group" style="max-width:110px;justify-content:flex-end"><label>&nbsp;</label><button class="btn btn-success" style="justify-content:center" onclick="saveSettings()">💾 บันทึก</button></div>
+        </div>
+        <div class="form-row" style="margin-top:8px">
+          <div class="form-group" style="flex:2"><label>🔔 LINE Channel Access Token</label><input type="text" id="cfg-line-token" placeholder="Messaging API → Channel access token" style="font-family:monospace"></div>
+          <div class="form-group" style="flex:1"><label>LINE Group ID <span id="group-id-badge" style="font-size:11px;color:var(--success)"></span></label><input type="text" id="cfg-line-user" placeholder="capture อัตโนมัติ หรือกรอก C..." style="font-family:monospace" readonly></div>
+        </div>
+        <div class="form-row" style="margin-top:8px">
+          <div class="form-group" style="flex:2"><label>🔑 LINE Channel Secret</label><input type="text" id="cfg-line-secret" placeholder="Basic settings → Channel secret" style="font-family:monospace"></div>
+        </div>
+        <div style="background:var(--warning-soft);border-radius:10px;padding:10px 14px;margin-top:4px;font-size:13px;color:var(--warning)">
+          <strong>ต้องกรอก Channel Secret ด้วย</strong> — ใช้ตรวจสอบว่า webhook เป็นของ LINE จริง (ไม่งั้นระบบจะปฏิเสธ webhook ทั้งหมด)
+        </div>
+        <div style="background:var(--success-soft);border-radius:10px;padding:10px 14px;margin-top:8px;font-size:13px;color:var(--success)">
+          <strong>วิธีเชื่อมกลุ่ม LINE:</strong>
+          1) developers.line.biz → Messaging API → Webhook URL → <code>https://attendance.poolvillapattayaparty.com/api/line-webhook</code>
+          &nbsp;2) เพิ่มบอทเข้ากลุ่ม &nbsp;3) ส่งข้อความในกลุ่ม → Group ID จะถูก capture อัตโนมัติ แล้วกดบันทึก
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>📡 อุปกรณ์สแกนนิ้ว</h2>
+          <button class="btn btn-primary" onclick="loadDevices()">🔄 รีเฟรช</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Device ID</th><th>ครั้งที่สแกน</th><th>ผู้ใช้</th><th>สแกนล่าสุด</th></tr></thead>
+            <tbody id="devices-body"><tr><td colspan="4" class="muted" style="text-align:center;padding:20px">กำลังโหลด...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>ℹ️ ข้อมูลระบบ</h2>
+        <div id="system-info" style="display:flex;gap:12px;flex-wrap:wrap"></div>
+      </div>
+    </div>
+
   </div>
-  <button class="btn" style="background:rgba(255,255,255,0.15);color:white" onclick="logout()">ออกจากระบบ</button>
 </div>
 
-<div class="tabs">
-  <div class="tab active" onclick="showTab('logs', this)">📋 บันทึกเวลา</div>
-  <div class="tab"        onclick="showTab('users', this)">👥 จัดการลายนิ้วมือ</div>
-  <div class="tab"        onclick="showTab('report', this)">📊 รายงาน & เงินเดือน</div>
-  <div class="tab"        onclick="showTab('config', this)">⚙️ ตั้งค่าระบบ</div>
-</div>
-
-<!-- TAB: LOGS -->
-<div id="tab-logs" class="content">
-  <div class="stats">
-    <div class="stat">
-      <div class="stat-num" id="stat-today">0</div>
-      <div class="stat-label">เข้างานวันนี้</div>
-    </div>
-    <div class="stat">
-      <div class="stat-num" id="stat-total">0</div>
-      <div class="stat-label">รายการทั้งหมด</div>
-    </div>
-    <div class="stat">
-      <div class="stat-num" id="stat-users">0</div>
-      <div class="stat-label">พนักงานที่ลงทะเบียน</div>
-    </div>
-  </div>
-
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <h2>📋 บันทึกเวลาล่าสุด</h2>
-      <button class="btn btn-primary" onclick="loadLogs()">🔄 รีเฟรช</button>
-    </div>
-    <table>
-      <thead>
-        <tr><th>#</th><th>ชื่อ</th><th>Finger ID</th><th>อุปกรณ์</th><th>เวลา</th><th>ประเภท</th><th>สถานะ</th></tr>
-      </thead>
-      <tbody id="logs-body">
-        <tr><td colspan="7" style="text-align:center;color:#999;padding:20px">กำลังโหลด...</td></tr>
-      </tbody>
-    </table>
-  </div>
-</div>
-
-<!-- TAB: USERS -->
-<div id="tab-users" class="content hidden">
-  <div class="card">
-    <h2>➕ เพิ่ม / แก้ไข พนักงาน</h2>
-    <div id="user-status" class="status"></div>
-    <div class="form-row">
-      <div class="form-group" style="max-width:90px">
-        <label>Finger ID *</label>
-        <input type="number" id="f-finger-id" placeholder="1" min="1" max="127">
-      </div>
-      <div class="form-group">
-        <label>ชื่อ-นามสกุล *</label>
-        <input type="text" id="f-name" placeholder="สมชาย ใจดี">
-      </div>
-      <div class="form-group" style="max-width:130px">
-        <label>รหัสพนักงาน</label>
-        <input type="text" id="f-emp-id" placeholder="EMP001">
-      </div>
-      <div class="form-group" style="max-width:150px">
-        <label>แผนก</label>
-        <input type="text" id="f-dept" placeholder="แผนกบริการ">
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group" style="max-width:140px">
-        <label>ฐานเดือน (บาท)</label>
-        <input type="number" id="f-salary" placeholder="0" min="0" step="100">
-      </div>
-      <div class="form-group" style="max-width:140px">
-        <label>เบี้ยขยัน (บาท)</label>
-        <input type="number" id="f-bonus" placeholder="0" min="0" step="100">
-      </div>
-      <div class="form-group" style="max-width:130px">
-        <label>เวลาเข้างาน</label>
-        <input type="time" id="f-start-time" value="08:00">
-      </div>
-      <div class="form-group" style="max-width:130px">
-        <label>ผ่อนผัน (นาที)</label>
-        <input type="number" id="f-grace" placeholder="15" min="0" max="120">
-      </div>
-      <div class="form-group" style="max-width:130px">
-        <label>OUT หลังเวลา</label>
-        <input type="time" id="f-checkout-time" value="17:00">
-      </div>
-      <div class="form-group" style="max-width:90px;justify-content:flex-end">
-        <label>&nbsp;</label>
-        <button class="btn btn-success" onclick="saveUser()">💾 บันทึก</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <h2>👥 รายชื่อพนักงาน</h2>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-primary" onclick="loadUsers()">🔄 รีเฟรช</button>
-        <button class="btn btn-warning" onclick="clearSensor()">🖐️ ล้างนิ้วในเครื่อง</button>
-        <button class="btn btn-danger"  onclick="resetAllData()">🗑️ ล้างข้อมูลทั้งหมด</button>
-      </div>
-    </div>
-    <table>
-      <thead>
-        <tr><th>Finger ID</th><th>ลายนิ้วมือ</th><th>ชื่อ-นามสกุล</th><th>รหัสพนักงาน</th><th>แผนก</th><th>สถานะนิ้ว</th><th>จัดการ</th></tr>
-      </thead>
-      <tbody id="users-body">
-        <tr><td colspan="7" style="text-align:center;color:#999;padding:20px">กำลังโหลด...</td></tr>
-      </tbody>
-    </table>
-  </div>
-</div>
-
-<!-- TAB: REPORT -->
-<div id="tab-report" class="content hidden">
-  <div class="card">
-    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <h2>📊 รายงานเงินเดือน</h2>
-      <select id="r-month" style="padding:6px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px">
-        <option value="1">มกราคม</option><option value="2">กุมภาพันธ์</option>
-        <option value="3">มีนาคม</option><option value="4">เมษายน</option>
-        <option value="5">พฤษภาคม</option><option value="6">มิถุนายน</option>
-        <option value="7">กรกฎาคม</option><option value="8">สิงหาคม</option>
-        <option value="9">กันยายน</option><option value="10">ตุลาคม</option>
-        <option value="11">พฤศจิกายน</option><option value="12">ธันวาคม</option>
-      </select>
-      <input type="number" id="r-year" style="width:80px;padding:6px 10px;border:1px solid #ddd;border-radius:8px;font-size:14px">
-      <button class="btn btn-primary" onclick="loadReport()">🔍 ดูรายงาน</button>
-      <button class="btn btn-warning" onclick="window.print()">🖨️ พิมพ์</button>
-    </div>
-  </div>
-
-  <div id="report-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:4px"></div>
-
-  <div class="card" style="overflow-x:auto">
-    <table>
-      <thead>
-        <tr>
-          <th>ชื่อ-สกุล / แผนก</th>
-          <th>วันที่มา</th>
-          <th>เข้าสาย</th>
-          <th>ฐานเดือน</th>
-          <th>เบี้ยขยัน</th>
-          <th>ค่าคอม</th>
-          <th>รวมทั้งหมด</th>
-          <th>จัดการ</th>
-        </tr>
-      </thead>
-      <tbody id="report-body">
-        <tr><td colspan="8" style="text-align:center;color:#999;padding:20px">เลือกเดือนและปี แล้วกด "ดูรายงาน"</td></tr>
-      </tbody>
-      <tfoot id="report-foot"></tfoot>
-    </table>
-  </div>
-</div>
-
-<!-- TAB: CONFIG -->
-<div id="tab-config" class="content hidden">
-
-  <div class="card">
-    <h2>⚙️ ค่าเริ่มต้นสำหรับพนักงานใหม่</h2>
-    <p style="color:#888;font-size:13px;margin-bottom:12px">กรอกอัตโนมัติทุกครั้งที่เปิดหน้าเพิ่มพนักงาน</p>
-    <div id="config-status" class="status"></div>
-    <div class="form-row">
-      <div class="form-group" style="max-width:130px">
-        <label>เวลาเข้างาน</label>
-        <input type="time" id="cfg-work-start" value="08:00">
-      </div>
-      <div class="form-group" style="max-width:130px">
-        <label>OUT หลังเวลา</label>
-        <input type="time" id="cfg-checkout" value="17:00">
-      </div>
-      <div class="form-group" style="max-width:130px">
-        <label>ผ่อนผัน (นาที)</label>
-        <input type="number" id="cfg-grace" placeholder="15" min="0" max="120">
-      </div>
-      <div class="form-group" style="max-width:140px">
-        <label>ฐานเดือน (บาท)</label>
-        <input type="number" id="cfg-salary" placeholder="0" min="0" step="100">
-      </div>
-      <div class="form-group" style="max-width:140px">
-        <label>เบี้ยขยัน (บาท)</label>
-        <input type="number" id="cfg-bonus" placeholder="0" min="0" step="100">
-      </div>
-      <div class="form-group" style="max-width:90px;justify-content:flex-end">
-        <label>&nbsp;</label>
-        <button class="btn btn-success" onclick="saveSettings()">💾 บันทึก</button>
-      </div>
-    </div>
-    <div class="form-row" style="margin-top:8px">
-      <div class="form-group" style="flex:2">
-        <label>🔔 LINE Channel Access Token</label>
-        <input type="text" id="cfg-line-token" placeholder="จาก developers.line.biz → Messaging API → Channel access token" style="font-family:monospace">
-      </div>
-      <div class="form-group" style="flex:1">
-        <label>LINE Group ID <span id="group-id-badge" style="font-size:11px;color:#2e7d32"></span></label>
-        <input type="text" id="cfg-line-user" placeholder="กด capture อัตโนมัติ หรือกรอก C..." style="font-family:monospace" readonly>
-      </div>
-    </div>
-    <div class="form-row" style="margin-top:8px">
-      <div class="form-group" style="flex:2">
-        <label>🔑 LINE Channel Secret</label>
-        <input type="text" id="cfg-line-secret" placeholder="จาก developers.line.biz → Basic settings → Channel secret" style="font-family:monospace">
-      </div>
-    </div>
-    <div style="background:#fff3e0;border-radius:8px;padding:10px 14px;margin-top:4px;font-size:13px;color:#e65100">
-      <strong>ต้องกรอก Channel Secret ด้วย</strong> — ใช้ตรวจสอบว่า webhook ที่เข้ามาเป็นของ LINE จริง (ไม่งั้นระบบจะปฏิเสธ webhook ทั้งหมด)
-    </div>
-    <div style="background:#e8f5e9;border-radius:8px;padding:10px 14px;margin-top:4px;font-size:13px;color:#1b5e20">
-      <strong>วิธีเชื่อมกลุ่ม LINE:</strong>
-      1) ไป <a href="https://developers.line.biz" target="_blank">developers.line.biz</a> → Messaging API → Webhook URL → ใส่ <code style="background:#c8e6c9;padding:1px 4px;border-radius:3px">https://attendance.poolvillapattayaparty.com/api/line-webhook</code>
-      &nbsp;&nbsp;2) เพิ่มบอทเข้ากลุ่ม LINE &nbsp;&nbsp;3) ส่งข้อความอะไรก็ได้ในกลุ่ม → Group ID จะถูก capture อัตโนมัติ แล้วกดบันทึก
-    </div>
-  </div>
-
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <h2>📡 อุปกรณ์สแกนนิ้ว</h2>
-      <button class="btn btn-primary" onclick="loadDevices()">🔄 รีเฟรช</button>
-    </div>
-    <table>
-      <thead>
-        <tr><th>Device ID</th><th>ครั้งที่สแกน</th><th>ผู้ใช้</th><th>สแกนล่าสุด</th></tr>
-      </thead>
-      <tbody id="devices-body">
-        <tr><td colspan="4" style="text-align:center;color:#999;padding:20px">กำลังโหลด...</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="card">
-    <h2>ℹ️ ข้อมูลระบบ</h2>
-    <div id="system-info" style="display:flex;gap:12px;flex-wrap:wrap"></div>
-  </div>
-
-</div>
-
-<!-- Modal: Commission edit -->
+<!-- ================= MODALS ================= -->
 <div class="modal-bg" id="comm-modal">
   <div class="modal" style="max-width:360px">
     <h3 id="comm-modal-title">แก้ไขค่าคอม</h3>
-    <div class="form-group" style="margin-top:16px">
-      <label>จำนวน (บาท)</label>
-      <input type="number" id="comm-amount" min="0" step="0.01" style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;margin-top:4px">
-    </div>
-    <div class="form-group" style="margin-top:12px">
-      <label>หมายเหตุ</label>
-      <input type="text" id="comm-notes" placeholder="เช่น ค่า service charge" style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;margin-top:4px">
-    </div>
+    <div class="form-group" style="margin-top:16px;text-align:left"><label>จำนวน (บาท)</label><input type="number" id="comm-amount" min="0" step="0.01"></div>
+    <div class="form-group" style="margin-top:12px;text-align:left"><label>หมายเหตุ</label><input type="text" id="comm-notes" placeholder="เช่น ค่า service charge"></div>
     <div style="display:flex;gap:8px;margin-top:20px">
-      <button class="btn btn-success" onclick="saveCommission()">💾 บันทึก</button>
-      <button class="btn btn-danger"  onclick="document.getElementById('comm-modal').classList.remove('show')">ยกเลิก</button>
+      <button class="btn btn-success" style="flex:1;justify-content:center" onclick="saveCommission()">💾 บันทึก</button>
+      <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="document.getElementById('comm-modal').classList.remove('show')">ยกเลิก</button>
     </div>
   </div>
 </div>
 
-<!-- Modal: Daily detail -->
 <div class="modal-bg" id="detail-modal">
   <div class="modal" style="max-width:660px;width:94%">
     <h3 id="detail-title">รายละเอียดรายวัน</h3>
-    <p id="detail-meta" style="color:#666;font-size:13px;margin:4px 0 16px"></p>
-    <div style="overflow-x:auto">
+    <p id="detail-meta" class="muted" style="font-size:13px;margin:4px 0 16px"></p>
+    <div class="table-wrap">
       <table>
-        <thead>
-          <tr><th>วันที่</th><th>เข้างาน</th><th>ออกงาน</th><th>ชั่วโมง</th><th>สถานะ</th></tr>
-        </thead>
+        <thead><tr><th>วันที่</th><th>เข้างาน</th><th>ออกงาน</th><th>ชั่วโมง</th><th>สถานะ</th></tr></thead>
         <tbody id="detail-body"></tbody>
       </table>
     </div>
@@ -313,7 +287,6 @@
   </div>
 </div>
 
-<!-- Modal: Enroll -->
 <div class="modal-bg" id="enroll-modal">
   <div class="modal">
     <div class="modal-fp pulse" id="modal-fp-display">
@@ -328,18 +301,13 @@
   </div>
 </div>
 
-<!-- Modal: View Fingerprint -->
 <div class="modal-bg" id="view-modal">
   <div class="modal">
-    <div class="modal-fp" id="view-fp-display">
-      <canvas id="view-canvas" width="120" height="144"></canvas>
-    </div>
+    <div class="modal-fp" id="view-fp-display"><canvas id="view-canvas" width="120" height="144"></canvas></div>
     <h3 id="view-name">ลายนิ้วมือ</h3>
     <p id="view-info" style="margin-bottom:16px"></p>
     <button class="btn btn-primary" onclick="document.getElementById('view-modal').classList.remove('show')">ปิด</button>
   </div>
-</div>
-
 </div>
 
 <script src="app.js"></script>

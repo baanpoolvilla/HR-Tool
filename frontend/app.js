@@ -1,6 +1,6 @@
 const API_BASE = 'https://attendance.poolvillapattayaparty.com';
 
-// ===== Auth =====
+// ===== Auth-aware fetch =====
 async function api(path, opts = {}) {
   const res = await fetch(API_BASE + path, { ...opts, credentials: 'include' });
   if (res.status === 401) {
@@ -27,7 +27,7 @@ function showLogin() {
 function showApp() {
   document.getElementById('login-screen').classList.add('hidden');
   document.getElementById('app-shell').classList.remove('hidden');
-  loadLogs();
+  showPage('dashboard', document.querySelector('.nav-item[data-page="dashboard"]'));
 }
 
 async function login() {
@@ -44,8 +44,10 @@ async function login() {
     document.getElementById('login-password').value = '';
     showApp();
   } else if (res.status === 429) {
+    statusEl.className = 'status error';
     statusEl.textContent = '⏳ ลองผิดหลายครั้งเกินไป กรุณารอสักครู่แล้วลองใหม่';
   } else {
+    statusEl.className = 'status error';
     statusEl.textContent = '❌ รหัสผ่านไม่ถูกต้อง';
   }
 }
@@ -55,6 +57,111 @@ async function logout() {
   showLogin();
 }
 
+// ===== Navigation =====
+const PAGE_TITLES = {
+  dashboard: 'ภาพรวม', logs: 'บันทึกเวลา', users: 'พนักงาน',
+  report: 'รายงาน & เงินเดือน', config: 'ตั้งค่าระบบ'
+};
+
+function showPage(page, el) {
+  document.querySelectorAll('.content').forEach(e => e.classList.add('hidden'));
+  document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
+  document.getElementById('tab-' + page).classList.remove('hidden');
+  if (el) el.classList.add('active');
+  else {
+    const n = document.querySelector(`.nav-item[data-page="${page}"]`);
+    if (n) n.classList.add('active');
+  }
+  document.getElementById('page-title').textContent = PAGE_TITLES[page] || '';
+  closeSidebar();
+  if (page === 'dashboard') loadDashboard();
+  if (page === 'logs')   loadLogs();
+  if (page === 'users')  { loadUsers(); applyDefaultsToForm(); }
+  if (page === 'config') { loadSettings(); loadDevices(); loadSystemInfo(); }
+}
+
+function openSidebar()  { document.getElementById('sidebar').classList.add('open');  document.getElementById('scrim').classList.add('show'); }
+function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); document.getElementById('scrim').classList.remove('show'); }
+
+// ===== Theme =====
+function currentTheme() {
+  const t = document.documentElement.getAttribute('data-theme');
+  if (t) return t;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+function applyTheme(t) {
+  if (t) document.documentElement.setAttribute('data-theme', t);
+  else   document.documentElement.removeAttribute('data-theme');
+  const btn = document.getElementById('theme-btn');
+  if (btn) btn.textContent = currentTheme() === 'dark' ? '☀️' : '🌙';
+}
+function toggleTheme() {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('theme', next);
+  applyTheme(next);
+}
+function initTheme() { applyTheme(localStorage.getItem('theme') || null); }
+
+// ===== Formatters =====
+function fmtTime(ts)  { return new Date(ts).toLocaleString('th-TH'); }
+function fmtHHMM(ts)  {
+  if (!ts) return '-';
+  const d = new Date(ts);
+  return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+}
+function fmtMoney(n)  { return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2 }); }
+function avatarColor(name) {
+  const colors = ['#4f46e5','#0284c7','#16a34a','#d97706','#9333ea','#dc2626','#0891b2','#ca8a04'];
+  let h = 0; for (let i=0;i<name.length;i++) h = name.charCodeAt(i) + ((h<<5)-h);
+  return colors[Math.abs(h) % colors.length];
+}
+
+// ===== Dashboard =====
+async function loadDashboard() {
+  const res = await api('/api/dashboard');
+  if (!res.ok) {
+    document.getElementById('dash-recent').innerHTML =
+      '<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">⚠️ ต้องอัปเดต backend ก่อน (endpoint /api/dashboard)</td></tr>';
+    document.getElementById('dash-present-list').innerHTML =
+      '<div class="muted" style="text-align:center;padding:20px">รอ backend เวอร์ชันใหม่</div>';
+    return;
+  }
+  const d   = await res.json();
+
+  document.getElementById('dash-present').textContent    = d.present_today;
+  document.getElementById('dash-late').textContent       = d.late_today;
+  document.getElementById('dash-absent').textContent     = d.absent_today;
+  document.getElementById('dash-registered').textContent = d.registered;
+
+  const recent = document.getElementById('dash-recent');
+  if (!d.recent_scans.length) {
+    recent.innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">ยังไม่มีการสแกนวันนี้</td></tr>';
+  } else {
+    recent.innerHTML = d.recent_scans.map(r => {
+      const isOut     = r.check_type === 'OUT';
+      const typeBadge = isOut ? '<span class="badge badge-out">🚪 OUT</span>' : '<span class="badge badge-in">✅ IN</span>';
+      const statBadge = isOut ? '<span class="muted">-</span>'
+        : (r.is_late ? '<span class="badge badge-late">⏰ สาย</span>' : '<span class="badge badge-ontime">✅ ตรงเวลา</span>');
+      return `<tr><td><strong>${r.name || 'Unknown'}</strong></td><td>${fmtHHMM(r.check_time)}</td><td>${typeBadge}</td><td>${statBadge}</td></tr>`;
+    }).join('');
+  }
+
+  const list = document.getElementById('dash-present-list');
+  if (!d.present_list.length) {
+    list.innerHTML = '<div class="muted" style="text-align:center;padding:20px">ยังไม่มีใครเข้างานวันนี้</div>';
+  } else {
+    list.innerHTML = d.present_list.map(p => {
+      const initial = (p.name || '?').trim().charAt(0).toUpperCase();
+      const late    = p.is_late ? '<span class="badge badge-late">สาย</span>' : '<span class="badge badge-ontime">ตรงเวลา</span>';
+      return `<div class="person-row">
+        <div class="avatar" style="background:${avatarColor(p.name || '')}">${initial}</div>
+        <div class="who"><b>${p.name}</b><small>เข้างาน ${fmtHHMM(p.check_time)}</small></div>
+        ${late}
+      </div>`;
+    }).join('');
+  }
+}
+
 // ===== Fingerprint canvas =====
 function drawFingerprint(canvas, seed, enrolled) {
   const ctx = canvas.getContext('2d');
@@ -62,7 +169,7 @@ function drawFingerprint(canvas, seed, enrolled) {
   ctx.clearRect(0, 0, w, h);
 
   if (!enrolled) {
-    ctx.fillStyle = '#f5f5f5';
+    ctx.fillStyle = '#e5e7eb';
     ctx.fillRect(0, 0, w, h);
     return;
   }
@@ -91,37 +198,9 @@ function drawFingerprint(canvas, seed, enrolled) {
   ctx.fill();
 }
 
-// ===== Tabs =====
-function showTab(tab, el) {
-  document.querySelectorAll('.content').forEach(e => e.classList.add('hidden'));
-  document.querySelectorAll('.tab').forEach(e => e.classList.remove('active'));
-  document.getElementById('tab-' + tab).classList.remove('hidden');
-  el.classList.add('active');
-  if (tab === 'logs')   loadLogs();
-  if (tab === 'users')  { loadUsers(); applyDefaultsToForm(); }
-  if (tab === 'config') { loadSettings(); loadDevices(); loadSystemInfo(); }
-}
-
-function fmtTime(ts) {
-  return new Date(ts).toLocaleString('th-TH');
-}
-
-function fmtHHMM(ts) {
-  if (!ts) return '-';
-  const d = new Date(ts);
-  return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
-}
-
-function fmtMoney(n) {
-  return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2 });
-}
-
 // ===== Logs =====
 async function loadLogs() {
-  const [logsRes, statsRes] = await Promise.all([
-    api('/api/logs'),
-    api('/api/stats'),
-  ]);
+  const [logsRes, statsRes] = await Promise.all([ api('/api/logs'), api('/api/stats') ]);
   const logs  = await logsRes.json();
   const stats = await statsRes.json();
 
@@ -131,19 +210,14 @@ async function loadLogs() {
 
   const tbody = document.getElementById('logs-body');
   if (!logs.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#999;padding:20px">ยังไม่มีบันทึก</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="muted" style="text-align:center;padding:20px">ยังไม่มีบันทึก</td></tr>';
     return;
   }
   tbody.innerHTML = logs.map((l, i) => {
     const isOut  = l.check_type === 'OUT';
-    const badge  = isOut
-      ? '<span class="badge" style="background:#fff3e0;color:#e65100">🚪 OUT</span>'
-      : '<span class="badge badge-in">✅ IN</span>';
-    const lateBadge = isOut
-      ? '<span style="color:#bbb">-</span>'
-      : (l.is_late
-          ? '<span class="badge" style="background:#fce4ec;color:#c62828">⏰ สาย</span>'
-          : '<span class="badge" style="background:#e8f5e9;color:#2e7d32">✅ ตรงเวลา</span>');
+    const badge  = isOut ? '<span class="badge badge-out">🚪 OUT</span>' : '<span class="badge badge-in">✅ IN</span>';
+    const lateBadge = isOut ? '<span class="muted">-</span>'
+      : (l.is_late ? '<span class="badge badge-late">⏰ สาย</span>' : '<span class="badge badge-ontime">✅ ตรงเวลา</span>');
     return `
     <tr>
       <td>${i + 1}</td>
@@ -164,7 +238,7 @@ async function loadUsers() {
   const tbody = document.getElementById('users-body');
 
   if (!users.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#999;padding:20px">ยังไม่มีพนักงาน</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="muted" style="text-align:center;padding:20px">ยังไม่มีพนักงาน</td></tr>';
     return;
   }
 
@@ -172,8 +246,8 @@ async function loadUsers() {
     const enrolled = u.enrolled || u.fp_pattern || u.confidence > 0;
     const seed     = u.finger_id * 137 + (u.name.charCodeAt(0) || 0) * 31;
     const badge    = enrolled
-      ? '<span class="badge" style="background:#e8f5e9;color:#2e7d32">✅ ลงทะเบียนแล้ว</span>'
-      : '<span class="badge" style="background:#fce8e6;color:#c62828">❌ ยังไม่ลงทะเบียน</span>';
+      ? '<span class="badge badge-ok">✅ ลงทะเบียนแล้ว</span>'
+      : '<span class="badge badge-no">❌ ยังไม่ลงทะเบียน</span>';
     return `
       <tr>
         <td><strong>${u.finger_id}</strong></td>
@@ -202,7 +276,7 @@ async function loadUsers() {
     users.forEach(u => {
       const canvas = document.getElementById(`fp-mini-${u.finger_id}`);
       if (!canvas) return;
-      const seed    = u.finger_id * 137 + (u.name.charCodeAt(0) || 0) * 31;
+      const seed     = u.finger_id * 137 + (u.name.charCodeAt(0) || 0) * 31;
       const enrolled = u.enrolled || u.fp_pattern || u.confidence > 0;
       drawFingerprint(canvas, seed, enrolled);
     });
@@ -238,8 +312,6 @@ async function startEnroll(fingerId, name) {
     body: JSON.stringify({ finger_id: fingerId }),
   });
 
-  // Phase 1: รอ ESP32 รับคำสั่ง (poll /api/enroll-watch — ไม่แตะ queue)
-  // Phase 2: รอ enroll สำเร็จ (poll /api/users จนกว่า enrolled=true)
   let phase = 'waiting';
   let elapsed = 0;
 
@@ -301,7 +373,6 @@ function editUser(fid, name, empId, dept, salary, bonus, startTime, grace, check
   document.getElementById('f-start-time').value     = startTime    || '08:00';
   document.getElementById('f-grace').value          = grace        || 15;
   document.getElementById('f-checkout-time').value  = checkoutTime || '17:00';
-  document.querySelector('#tab-users').scrollTo(0, 0);
   window.scrollTo(0, 0);
 }
 
@@ -364,7 +435,7 @@ async function resetAllData() {
   const res = await api('/api/admin/reset', { method: 'DELETE' });
   if (res.ok) {
     alert('✅ ล้างข้อมูลเรียบร้อยแล้ว');
-    loadLogs();
+    loadDashboard();
     loadUsers();
   }
 }
@@ -432,7 +503,7 @@ async function loadDevices() {
   const devs  = await res.json();
   const tbody = document.getElementById('devices-body');
   if (!devs.length) {
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#999;padding:16px">ยังไม่มีอุปกรณ์</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:16px">ยังไม่มีอุปกรณ์</td></tr>';
     return;
   }
   tbody.innerHTML = devs.map(d => `
@@ -455,9 +526,8 @@ async function loadSystemInfo() {
       { label: '📡 อุปกรณ์',          value: info.total_devices  + ' เครื่อง' },
       { label: '🕐 เวลาเซิร์ฟเวอร์',  value: thTime },
     ].map(c => `
-      <div class="stat" style="flex:1;min-width:160px">
-        <div class="stat-num" style="font-size:18px">${c.value}</div>
-        <div class="stat-label">${c.label}</div>
+      <div class="stat" style="flex:1;min-width:180px">
+        <div><div class="stat-num" style="font-size:18px">${c.value}</div><div class="stat-label">${c.label}</div></div>
       </div>`).join('');
   } catch(e) {}
 }
@@ -470,7 +540,7 @@ async function loadReport() {
   const month = document.getElementById('r-month').value;
   const year  = document.getElementById('r-year').value;
   document.getElementById('report-body').innerHTML =
-    '<tr><td colspan="8" style="text-align:center;color:#999;padding:20px">กำลังโหลด...</td></tr>';
+    '<tr><td colspan="8" class="muted" style="text-align:center;padding:20px">กำลังโหลด...</td></tr>';
 
   const res  = await api(`/api/report?year=${year}&month=${month}`);
   const data = await res.json();
@@ -484,7 +554,9 @@ function renderReport(data) {
   const sumDiv = document.getElementById('report-summary');
 
   if (!data.report.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;padding:20px">ไม่มีข้อมูลพนักงาน</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="muted" style="text-align:center;padding:20px">ไม่มีข้อมูลพนักงาน</td></tr>';
+    tfoot.innerHTML = '';
+    sumDiv.innerHTML = '';
     return;
   }
 
@@ -497,22 +569,22 @@ function renderReport(data) {
     totPay     += u.total_pay;
     totPresent += u.days_present;
 
-    const lateColor  = u.days_late > 0 ? '#c62828' : '#2e7d32';
+    const lateColor  = u.days_late > 0 ? 'var(--danger)' : 'var(--success)';
     const lateTxt    = u.days_late > 0 ? `⚠️ ${u.days_late} วัน` : '✅ ไม่สาย';
     const bonusTxt   = u.attendance_bonus > 0 && u.bonus_earned === 0
-      ? `<span style="color:#999;font-size:12px">(สาย)</span>` : '';
+      ? `<span class="muted" style="font-size:12px">(สาย)</span>` : '';
 
     return `
       <tr>
         <td>
           <div><strong>${u.name}</strong></div>
-          <div style="font-size:11px;color:#888">${u.employee_id || ''} ${u.department ? '· '+u.department : ''}</div>
+          <div class="muted" style="font-size:11px">${u.employee_id || ''} ${u.department ? '· '+u.department : ''}</div>
         </td>
         <td style="text-align:center">${u.days_present} วัน</td>
         <td style="text-align:center;color:${lateColor}">${lateTxt}</td>
         <td style="text-align:right">${fmtMoney(u.base_salary)}</td>
         <td style="text-align:right">
-          <span style="color:${u.bonus_earned > 0 ? '#2e7d32' : '#999'}">${fmtMoney(u.bonus_earned)}</span>
+          <span style="color:${u.bonus_earned > 0 ? 'var(--success)' : 'var(--text-muted)'}">${fmtMoney(u.bonus_earned)}</span>
           ${bonusTxt}
         </td>
         <td style="text-align:right" id="comm-cell-${u.finger_id}">
@@ -529,7 +601,7 @@ function renderReport(data) {
   }).join('');
 
   tfoot.innerHTML = `
-    <tr style="background:#f5f5f5;font-weight:bold">
+    <tr style="background:var(--surface-2);font-weight:bold">
       <td>รวมทั้งหมด (${data.report.length} คน)</td>
       <td style="text-align:center">${totPresent} วัน</td>
       <td></td>
@@ -540,16 +612,16 @@ function renderReport(data) {
       <td></td>
     </tr>`;
 
-  const monthNames = ['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.',
-                      'ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+  const monthNames = ['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
   sumDiv.innerHTML = [
-    { label: '👥 พนักงาน', value: data.report.length + ' คน', color: '#e3f2fd' },
-    { label: '📅 วันทำงาน', value: Math.round(totPresent / (data.report.length || 1)) + ' วัน/คน', color: '#e8f5e9' },
-    { label: '💰 ยอดรวม', value: '฿' + fmtMoney(totPay), color: '#fff3e0' },
+    { label: '👥 พนักงาน', value: data.report.length + ' คน', ico: 'blue' },
+    { label: '📅 วันทำงานเฉลี่ย', value: Math.round(totPresent / (data.report.length || 1)) + ' วัน/คน', ico: 'green' },
+    { label: '💰 ยอดรวม', value: '฿' + fmtMoney(totPay), ico: 'amber' },
   ].map(c => `
-    <div class="stat" style="background:${c.color};flex:1;min-width:140px">
-      <div class="stat-num" style="font-size:18px">${c.value}</div>
-      <div class="stat-label">${c.label} ${monthNames[data.month]} ${data.year}</div>
+    <div class="stat" style="flex:1;min-width:150px">
+      <div class="stat-ico ${c.ico}">${c.label.split(' ')[0]}</div>
+      <div><div class="stat-num" style="font-size:18px">${c.value}</div>
+      <div class="stat-label">${c.label.substring(2)} ${monthNames[data.month]} ${data.year}</div></div>
     </div>`).join('');
 }
 
@@ -594,20 +666,20 @@ function showDaily(fingerId) {
 
   const tbody = document.getElementById('detail-body');
   if (!u.daily_records.length) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#999;padding:16px">ไม่มีข้อมูล</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="muted" style="text-align:center;padding:16px">ไม่มีข้อมูล</td></tr>';
   } else {
     tbody.innerHTML = u.daily_records.map(r => {
       const dateObj  = new Date(r.date);
       const dateStr  = dateObj.toLocaleDateString('th-TH', { weekday:'short', day:'numeric', month:'short' });
       const lateBadge = r.is_late
-        ? `<span class="badge" style="background:#fce4ec;color:#c62828">⚠️ สาย ${r.late_minutes} นาที</span>`
-        : `<span class="badge" style="background:#e8f5e9;color:#2e7d32">✅ ตรงเวลา</span>`;
+        ? `<span class="badge badge-late">⚠️ สาย ${r.late_minutes} นาที</span>`
+        : `<span class="badge badge-ontime">✅ ตรงเวลา</span>`;
       return `
         <tr>
           <td>${dateStr}</td>
           <td>${fmtHHMM(r.first_in)}</td>
-          <td>${r.last_out ? fmtHHMM(r.last_out) : '<span style="color:#999">-</span>'}</td>
-          <td>${r.work_hours !== null ? r.work_hours + ' ชม.' : '<span style="color:#999">-</span>'}</td>
+          <td>${r.last_out ? fmtHHMM(r.last_out) : '<span class="muted">-</span>'}</td>
+          <td>${r.work_hours !== null ? r.work_hours + ' ชม.' : '<span class="muted">-</span>'}</td>
           <td>${lateBadge}</td>
         </tr>`;
     }).join('');
@@ -620,8 +692,11 @@ function showDaily(fingerId) {
 document.getElementById('r-month').value = new Date().getMonth() + 1;
 document.getElementById('r-year').value  = new Date().getFullYear();
 
+initTheme();
 checkSession();
+
 setInterval(() => {
-  const shellVisible = !document.getElementById('app-shell').classList.contains('hidden');
-  if (shellVisible && !document.getElementById('tab-logs').classList.contains('hidden')) loadLogs();
+  if (document.getElementById('app-shell').classList.contains('hidden')) return;
+  if (!document.getElementById('tab-dashboard').classList.contains('hidden'))      loadDashboard();
+  else if (!document.getElementById('tab-logs').classList.contains('hidden'))       loadLogs();
 }, 10000);

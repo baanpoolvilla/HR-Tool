@@ -515,6 +515,51 @@ app.get('/api/logs', requireAdmin, async (req, res) => {
   res.json(result.rows);
 });
 
+// WEB — dashboard summary (วันนี้ + รายการล่าสุด)
+app.get('/api/dashboard', requireAdmin, async (req, res) => {
+  const bangkokNow = toTH(new Date());
+  const todayDate  = bangkokNow.toISOString().split('T')[0];
+
+  const [todayLogsRes, usersRes, logsRes] = await Promise.all([
+    pool.query(
+      `SELECT device_id, finger_id, name, check_time, check_type, is_late
+       FROM attendance_logs
+       WHERE (check_time + INTERVAL '7 hours')::date = $1::date
+       ORDER BY check_time DESC`,
+      [todayDate]
+    ),
+    pool.query('SELECT COUNT(*) AS c FROM fp_users'),
+    pool.query('SELECT COUNT(*) AS c FROM attendance_logs'),
+  ]);
+
+  const rows       = todayLogsRes.rows;
+  const registered = parseInt(usersRes.rows[0].c);
+
+  // คนที่เข้างานแล้ววันนี้ (IN, ไม่นับ Unknown) — เก็บ IN ล่าสุดต่อคน
+  const presentMap = new Map();
+  for (const r of rows) {
+    if (r.check_type === 'IN' && r.name !== 'Unknown' && !presentMap.has(r.finger_id)) {
+      presentMap.set(r.finger_id, r);
+    }
+  }
+  const lateIds = new Set(
+    rows.filter(r => r.check_type === 'IN' && r.is_late && r.name !== 'Unknown').map(r => r.finger_id)
+  );
+
+  res.json({
+    today_date:    todayDate,
+    present_today: presentMap.size,
+    late_today:    lateIds.size,
+    absent_today:  Math.max(0, registered - presentMap.size),
+    registered,
+    total_logs:    parseInt(logsRes.rows[0].c),
+    present_list:  Array.from(presentMap.values()).map(r => ({
+      finger_id: r.finger_id, name: r.name, check_time: r.check_time, is_late: r.is_late
+    })),
+    recent_scans:  rows.slice(0, 12),
+  });
+});
+
 // WEB — stats
 app.get('/api/stats', requireAdmin, async (req, res) => {
   const today = await pool.query(`
