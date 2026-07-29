@@ -130,6 +130,15 @@ async function logAudit(action, target, detail, req) {
   }
 }
 
+// เด้งเวอร์ชันชุดลายนิ้ว → เครื่องสแกนอื่นจะเห็นว่าต้อง sync template ใหม่
+async function bumpTemplatesVersion() {
+  const r = await pool.query(
+    `UPDATE system_settings SET value = (COALESCE(NULLIF(value,'')::int, 0) + 1)::text
+     WHERE key = 'fp_templates_version' RETURNING value`
+  );
+  return r.rows[0]?.value || '0';
+}
+
 // ===== Admin session (stateless signed cookie) =====
 function getCookie(req, name) {
   const header = req.headers.cookie;
@@ -212,6 +221,7 @@ async function initDB() {
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS confidence INTEGER DEFAULT 0;`);
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS enrolled BOOLEAN DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS fp_pattern TEXT;`);
+  await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS fp_template TEXT;`);
   await pool.query(`UPDATE fp_users SET enrolled = TRUE WHERE confidence > 0;`);
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS nickname VARCHAR(100) DEFAULT '';`);
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS base_salary DECIMAL(10,2) DEFAULT 0;`);
@@ -257,8 +267,19 @@ async function initDB() {
     INSERT INTO system_settings (key, value, label) VALUES
       ('line_channel_token',  '', 'LINE Channel Access Token'),
       ('line_channel_secret', '', 'LINE Channel Secret'),
-      ('line_group_id',       '', 'LINE Group ID')
+      ('line_group_id',       '', 'LINE Group ID'),
+      ('fp_templates_version','0', 'เวอร์ชันชุดลายนิ้วมือ (สำหรับ sync หลายเครื่อง)')
     ON CONFLICT (key) DO NOTHING;
+  `);
+
+  // ===== ทะเบียนเครื่องสแกน (สำหรับ sync template หลายเครื่อง) =====
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS devices (
+      device_id       VARCHAR(50) PRIMARY KEY,
+      last_seen       TIMESTAMP DEFAULT NOW(),
+      synced_version  INTEGER DEFAULT 0,
+      template_count  INTEGER DEFAULT 0
+    );
   `);
 
   await pool.query(`
@@ -555,15 +576,20 @@ app.get('/api/enroll-pending', requireDeviceKey, (req, res) => {
   }
 });
 
-// ESP32 — enroll complete
+// ESP32 — enroll complete (template = base64 ของ template จริง สำหรับ sync หลายเครื่อง)
 app.post('/api/enroll-complete', requireDeviceKey, async (req, res) => {
-  const { finger_id, confidence, fp_pattern } = req.body;
+  const { finger_id, confidence, fp_pattern, template } = req.body;
   await pool.query(
-    'UPDATE fp_users SET confidence=$2, fp_pattern=$3, enrolled=TRUE WHERE finger_id=$1',
-    [finger_id, confidence || 50, fp_pattern || null]
+    `UPDATE fp_users SET confidence=$2, fp_pattern=$3, enrolled=TRUE,
+       fp_template = COALESCE($4, fp_template)
+     WHERE finger_id=$1`,
+    [finger_id, confidence || 50, fp_pattern || null, template || null]
   );
+  // มี template จริง → เด้งเวอร์ชันให้เครื่องอื่น sync
+  let version = null;
+  if (template) version = await bumpTemplatesVersion();
   enrollPickedUp = false;
-  res.json({ success: true });
+  res.json({ success: true, version });
 });
 
 // WEB — request enroll
@@ -595,7 +621,8 @@ app.post('/api/sensor-clear-request', requireAdmin, async (req, res) => {
   sensorClearPending = true;
   // เซนเซอร์กำลังจะถูก emptyDatabase() → รีเซ็ตสถานะลงทะเบียนใน DB ให้ตรงกัน
   // (ทุกคนต้องลงทะเบียนนิ้วใหม่) กันหน้าเว็บโชว์ "ลงทะเบียนแล้ว" ทั้งที่เซนเซอร์ว่าง
-  await pool.query('UPDATE fp_users SET enrolled = FALSE, confidence = 0, fp_pattern = NULL');
+  await pool.query('UPDATE fp_users SET enrolled = FALSE, confidence = 0, fp_pattern = NULL, fp_template = NULL');
+  await bumpTemplatesVersion();
   await logAudit('sensor_clear_request', null, {}, req);
   res.json({ success: true });
 });
@@ -605,13 +632,72 @@ app.delete('/api/admin/reset', requireAdmin, async (req, res) => {
   await pool.query('TRUNCATE attendance_logs, fp_users, monthly_commissions RESTART IDENTITY');
   // ล้างข้อมูลทั้งหมดต้องล้าง template ในเซนเซอร์ด้วย ไม่งั้น slot เก่าค้าง → match ผิดคน
   sensorClearPending = true;
+  await bumpTemplatesVersion();
   await logAudit('admin_reset', null, {}, req);
   res.json({ success: true });
 });
 
+// ===== Multi-device fingerprint template sync =====
+
+// ESP32 — poll เวอร์ชันชุดลายนิ้ว (เรียกบ่อย เบาๆ) + รายงานสถานะเครื่องตัวเอง
+// query: device_id, v (เวอร์ชันที่เครื่องนี้ sync ไว้แล้ว), count (จำนวน template ในเครื่อง)
+app.get('/api/sync-check', requireDeviceKey, async (req, res) => {
+  const deviceId = (req.query.device_id || '').toString().slice(0, 50) || 'UNKNOWN';
+  const syncedV  = parseInt(req.query.v) || 0;
+  const count    = parseInt(req.query.count) || 0;
+  await pool.query(
+    `INSERT INTO devices (device_id, last_seen, synced_version, template_count)
+     VALUES ($1, NOW(), $2, $3)
+     ON CONFLICT (device_id) DO UPDATE SET
+       last_seen = NOW(), synced_version = $2, template_count = $3`,
+    [deviceId, syncedV, count]
+  );
+  const vRow = await pool.query(`SELECT value FROM system_settings WHERE key='fp_templates_version'`);
+  res.json({ version: parseInt(vRow.rows[0]?.value) || 0 });
+});
+
+// ESP32 — ดึง template ทั้งหมดมา sync ลงเครื่อง
+app.get('/api/sync-templates', requireDeviceKey, async (req, res) => {
+  const vRow = await pool.query(`SELECT value FROM system_settings WHERE key='fp_templates_version'`);
+  const rows = await pool.query(
+    `SELECT finger_id, fp_template FROM fp_users
+     WHERE enrolled = TRUE AND fp_template IS NOT NULL ORDER BY finger_id`
+  );
+  res.json({
+    version: parseInt(vRow.rows[0]?.value) || 0,
+    templates: rows.rows.map(r => ({ finger_id: r.finger_id, template: r.fp_template })),
+  });
+});
+
+// WEB — รายชื่อเครื่องสแกน + สถานะ sync template
+app.get('/api/sync-devices', requireAdmin, async (req, res) => {
+  const vRow = await pool.query(`SELECT value FROM system_settings WHERE key='fp_templates_version'`);
+  const rows = await pool.query(
+    `SELECT device_id, last_seen, synced_version, template_count FROM devices ORDER BY device_id`
+  );
+  res.json({
+    current_version: parseInt(vRow.rows[0]?.value) || 0,
+    devices: rows.rows,
+  });
+});
+
+// WEB — สั่ง sync ลายนิ้วทุกเครื่อง (เด้งเวอร์ชัน → ทุกเครื่องจะดึงใหม่รอบ poll ถัดไป)
+app.post('/api/sync-request', requireAdmin, async (req, res) => {
+  const version = await bumpTemplatesVersion();
+  await logAudit('sync_request', null, { version }, req);
+  res.json({ success: true, version });
+});
+
 // WEB — list users
 app.get('/api/users', requireAdmin, async (req, res) => {
-  const result = await pool.query('SELECT * FROM fp_users ORDER BY finger_id');
+  // ไม่ส่ง fp_template (blob ใหญ่) มาหน้าเว็บ — ใช้เฉพาะฝั่งเครื่องสแกน sync
+  const result = await pool.query(`
+    SELECT id, finger_id, name, nickname, employee_id, department, created_at,
+           confidence, enrolled, fp_pattern,
+           (fp_template IS NOT NULL) AS has_template,
+           base_salary, attendance_bonus, work_start_time, late_grace_minutes,
+           checkout_start_time, shift_id, sso_enabled, pf_percent, tax_enabled
+    FROM fp_users ORDER BY finger_id`);
   res.json(result.rows);
 });
 

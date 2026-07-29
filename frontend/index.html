@@ -158,6 +158,7 @@
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn btn-success" onclick="openAddEmp()">➕ เพิ่มพนักงาน</button>
             <button class="btn btn-primary" onclick="loadUsers()">🔄 รีเฟรช</button>
+            <button class="btn btn-info" onclick="syncAllDevices()">🔄 Sync ลายนิ้วทุกเครื่อง</button>
             <button class="btn btn-warning" onclick="clearSensor()">🖐️ ล้างนิ้วในเครื่อง</button>
             <button class="btn btn-danger" onclick="resetAllData()">🗑️ ล้างข้อมูลทั้งหมด</button>
           </div>
@@ -168,6 +169,22 @@
             <tbody id="users-body"><tr><td colspan="7" class="muted" style="text-align:center;padding:20px">กำลังโหลด...</td></tr></tbody>
           </table>
         </div>
+      </div>
+
+      <!-- ===== สถานะเครื่องสแกน (multi-device sync) ===== -->
+      <div class="card">
+        <div class="card-head">
+          <h2>🖥️ เครื่องสแกน &amp; สถานะ Sync</h2>
+          <button class="btn btn-primary" onclick="loadSyncDevices()">🔄 รีเฟรช</button>
+        </div>
+        <div id="sync-status" class="status"></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>เครื่อง (Device ID)</th><th>ออนไลน์ล่าสุด</th><th>เทมเพลตในเครื่อง</th><th>สถานะ Sync</th></tr></thead>
+            <tbody id="sync-devices-body"><tr><td colspan="4" class="muted" style="text-align:center;padding:16px">ยังไม่มีเครื่องรายงานเข้ามา</td></tr></tbody>
+          </table>
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:8px">💡 ลงทะเบียนนิ้วที่เครื่องไหนก็ได้ — เครื่องอื่นจะดึงลายนิ้วไปเองอัตโนมัติภายในไม่กี่วินาที กด "Sync ลายนิ้วทุกเครื่อง" เพื่อบังคับให้ทุกเครื่องดึงใหม่ทันที</div>
       </div>
     </div>
 

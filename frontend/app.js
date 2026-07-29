@@ -78,7 +78,7 @@ function showPage(page, el) {
   closeSidebar();
   if (page === 'dashboard') loadDashboard();
   if (page === 'logs')   loadLogs();
-  if (page === 'users')  { populateShiftDropdown(); loadUsers(); }
+  if (page === 'users')  { populateShiftDropdown(); loadUsers(); loadSyncDevices(); }
   if (page === 'report') {}
   if (page === 'config') { loadSettings(); loadDevices(); loadSystemInfo(); }
   if (page === 'shifts') loadShifts();
@@ -515,6 +515,58 @@ async function clearSensor() {
   if (!confirm('🗑️ ล้างลายนิ้วมือทั้งหมดในเครื่องสแกน?\nต้องวาง ESP32 ให้ออนไลน์ก่อน')) return;
   await api('/api/sensor-clear-request', { method: 'POST' });
   alert('✅ ส่งคำสั่งแล้ว — รอ ESP32 รับคำสั่ง (ภายใน 3 วินาที)\nจอเครื่องจะขึ้น "SENSOR CLEARED"');
+}
+
+// ===== Multi-device template sync =====
+function timeAgo(ts) {
+  if (!ts) return '-';
+  const diff = (Date.now() - new Date(ts).getTime()) / 1000;
+  if (diff < 60)    return 'เมื่อครู่';
+  if (diff < 3600)  return Math.floor(diff / 60) + ' นาทีที่แล้ว';
+  if (diff < 86400) return Math.floor(diff / 3600) + ' ชม.ที่แล้ว';
+  return Math.floor(diff / 86400) + ' วันที่แล้ว';
+}
+
+async function loadSyncDevices() {
+  const tbody = document.getElementById('sync-devices-body');
+  if (!tbody) return;
+  try {
+    const res = await api('/api/sync-devices');
+    const data = await res.json();
+    const cur  = data.current_version || 0;
+    if (!data.devices || !data.devices.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:16px">ยังไม่มีเครื่องรายงานเข้ามา</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.devices.map(d => {
+      const online  = d.last_seen && (Date.now() - new Date(d.last_seen).getTime() < 30000);
+      const synced  = (d.synced_version || 0) >= cur;
+      const badge   = synced
+        ? '<span class="badge badge-ok">✅ อัปเดตแล้ว</span>'
+        : '<span class="badge badge-no">⏳ กำลัง sync…</span>';
+      const dot     = online ? '🟢' : '⚪';
+      return `<tr>
+        <td><strong>${dot} ${d.device_id}</strong></td>
+        <td>${timeAgo(d.last_seen)}</td>
+        <td>${d.template_count ?? 0} นิ้ว</td>
+        <td>${badge} <span class="muted" style="font-size:12px">(v${d.synced_version||0}/${cur})</span></td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:16px">โหลดสถานะไม่สำเร็จ</td></tr>';
+  }
+}
+
+async function syncAllDevices() {
+  const status = document.getElementById('sync-status');
+  const res = await api('/api/sync-request', { method: 'POST' });
+  if (res.ok) {
+    if (status) { status.className = 'status ok'; status.textContent = '✅ ส่งคำสั่ง sync แล้ว — ทุกเครื่องที่ออนไลน์จะดึงลายนิ้วใหม่ภายในไม่กี่วินาที'; }
+    setTimeout(loadSyncDevices, 1500);
+    setTimeout(() => { if (status) status.className = 'status'; }, 6000);
+  } else if (status) {
+    status.className = 'status error'; status.textContent = '❌ ส่งคำสั่งไม่สำเร็จ';
+  }
 }
 
 // ===== Admin Reset =====

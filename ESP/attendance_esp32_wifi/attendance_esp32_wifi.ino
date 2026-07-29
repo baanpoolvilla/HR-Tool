@@ -7,6 +7,7 @@
 #include <Preferences.h>
 #include <time.h>
 #include <esp_task_wdt.h>
+#include "mbedtls/base64.h"
 
 #define WDT_TIMEOUT 25  // auto-restart ถ้าค้างเกิน 25 วินาที
 
@@ -81,6 +82,22 @@ volatile int  pendingEnrollId    = -1;    // >=0 = มีคำสั่ง enro
 volatile bool pendingSensorClear = false; // true = มีคำสั่งล้างเซนเซอร์รอทำ
 volatile bool sensorBusy         = false; // true = core1 กำลังใช้เซนเซอร์ (enroll/clear) → core0 หยุด poll
 SemaphoreHandle_t netMutex = NULL;  // serialize HTTP ข้าม 2 core (GET บน core0 / POST บน core1)
+
+// ===== Multi-device template sync =====
+#define FP_HDR1 0xEF
+#define FP_HDR2 0x01
+#define FP_PID_CMD  0x01
+#define FP_PID_DATA 0x02
+#define FP_PID_ACK  0x07
+#define FP_PID_END  0x08
+#define FP_CMD_DOWNCHAR 0x09   // host -> sensor (โหลด template เข้า CharBuffer)
+#define TEMPLATE_SIZE   512    // ขนาด template ของ AS608
+uint8_t fpAddr[4] = { 0xFF, 0xFF, 0xFF, 0xFF };   // address เริ่มต้นของเซนเซอร์
+
+volatile bool pendingSync   = false;  // true = มีคำสั่ง sync template รอทำ
+int  localSyncVersion       = 0;      // เวอร์ชันชุดลายนิ้วที่เครื่องนี้ sync ไว้แล้ว
+int  localTemplateCount     = 0;      // จำนวน template ในเซนเซอร์
+unsigned long lastSyncCheck = 0;      // ครั้งล่าสุดที่ poll เวอร์ชัน
 
 // ===== เวลา =====
 String getTimeStr() {
@@ -194,6 +211,126 @@ bool httpGet(String url, String &respOut) {
   return ok;
 }
 
+// GET แบบ timeout ยาว (สำหรับดึงชุด template ที่ตอบขนาดใหญ่)
+bool httpGetBig(String url, String &respOut) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  if (netMutex) xSemaphoreTake(netMutex, portMAX_DELAY);
+  HTTPClient http;
+  http.begin(url);
+  http.setTimeout(12000);
+  http.addHeader("X-Device-Key", DEVICE_KEY);
+  int code = http.GET();
+  bool ok = (code == 200);
+  if (ok) respOut = http.getString();
+  http.end();
+  if (netMutex) xSemaphoreGive(netMutex);
+  return ok;
+}
+
+// ===== base64 (ใช้ mbedtls ที่ติดมากับ ESP32) =====
+String b64encode(const uint8_t *data, size_t len) {
+  size_t bufLen = ((len + 2) / 3) * 4 + 1;
+  uint8_t *out  = (uint8_t*)malloc(bufLen);
+  if (!out) return "";
+  size_t olen = 0;
+  String s = "";
+  if (mbedtls_base64_encode(out, bufLen, &olen, data, len) == 0) {
+    out[olen] = 0;
+    s = String((char*)out);
+  }
+  free(out);
+  return s;
+}
+
+int b64decode(const String &in, uint8_t *out, size_t outMax) {
+  size_t olen = 0;
+  if (mbedtls_base64_decode(out, outMax, &olen, (const uint8_t*)in.c_str(), in.length()) != 0) return -1;
+  return (int)olen;
+}
+
+// ===== อ่าน 1 แพ็กเก็ตดิบจากเซนเซอร์ (คืน pid + data) =====
+bool fpReadPacket(uint8_t *pid, uint8_t *out, int *outLen, int maxLen, uint32_t timeoutMs) {
+  uint32_t start = millis();
+  uint8_t last = 0; bool found = false;
+  while (millis() - start < timeoutMs) {           // sync หา header EF 01
+    esp_task_wdt_reset();
+    if (!fpSerial.available()) { delay(1); continue; }
+    uint8_t b = fpSerial.read();
+    if (last == FP_HDR1 && b == FP_HDR2) { found = true; break; }
+    last = b;
+  }
+  if (!found) return false;
+  uint8_t head[7]; int got = 0;                     // address(4)+pid(1)+len(2)
+  while (got < 7 && millis() - start < timeoutMs) {
+    if (fpSerial.available()) head[got++] = fpSerial.read(); else delay(1);
+  }
+  if (got < 7) return false;
+  *pid = head[4];
+  int len     = (head[5] << 8) | head[6];           // = dataLen + 2 (checksum)
+  int dataLen = len - 2;
+  if (dataLen < 0) return false;
+  int n = 0;
+  while (n < dataLen && millis() - start < timeoutMs) {
+    esp_task_wdt_reset();
+    if (fpSerial.available()) { uint8_t b = fpSerial.read(); if (n < maxLen) out[n] = b; n++; }
+    else delay(1);
+  }
+  int c = 0;                                         // ทิ้ง checksum 2 ไบต์
+  while (c < 2 && millis() - start < timeoutMs) { if (fpSerial.available()) { fpSerial.read(); c++; } else delay(1); }
+  *outLen = (dataLen < maxLen) ? dataLen : maxLen;
+  return true;
+}
+
+// ===== เขียน 1 แพ็กเก็ตดิบไปยังเซนเซอร์ =====
+void fpWritePacket(uint8_t pid, const uint8_t *data, int len) {
+  uint16_t plen = len + 2;                           // + checksum
+  uint16_t sum  = pid + ((plen >> 8) & 0xFF) + (plen & 0xFF);
+  fpSerial.write(FP_HDR1); fpSerial.write(FP_HDR2);
+  fpSerial.write(fpAddr, 4);
+  fpSerial.write(pid);
+  fpSerial.write((uint8_t)((plen >> 8) & 0xFF));
+  fpSerial.write((uint8_t)(plen & 0xFF));
+  for (int i = 0; i < len; i++) { fpSerial.write(data[i]); sum += data[i]; }
+  fpSerial.write((uint8_t)((sum >> 8) & 0xFF));
+  fpSerial.write((uint8_t)(sum & 0xFF));
+  fpSerial.flush();
+}
+
+// ===== ดึง template จาก slot id ในเซนเซอร์ -> buf[TEMPLATE_SIZE] =====
+bool downloadTemplate(int id, uint8_t *buf) {
+  if (finger.loadModel(id) != FINGERPRINT_OK) return false;   // flash slot -> CharBuffer1
+  while (fpSerial.available()) fpSerial.read();               // flush
+  if (finger.getModel() != FINGERPRINT_OK) return false;      // สั่ง UpChar (ACK ถูกอ่านโดย library)
+  int total = 0;
+  for (int p = 0; p < 16; p++) {                              // เผื่อหลายแพ็กเก็ต
+    uint8_t rpid; uint8_t tmp[300]; int tlen;
+    if (!fpReadPacket(&rpid, tmp, &tlen, sizeof(tmp), 2500)) break;
+    if (rpid != FP_PID_DATA && rpid != FP_PID_END) continue;
+    for (int i = 0; i < tlen && total < TEMPLATE_SIZE; i++) buf[total++] = tmp[i];
+    if (rpid == FP_PID_END) break;
+  }
+  return total >= TEMPLATE_SIZE;
+}
+
+// ===== เขียน template buf[TEMPLATE_SIZE] -> slot id ในเซนเซอร์ =====
+bool uploadTemplate(int id, const uint8_t *buf) {
+  while (fpSerial.available()) fpSerial.read();
+  uint8_t cmd[2] = { FP_CMD_DOWNCHAR, 0x01 };                 // DownChar buffer 1
+  fpWritePacket(FP_PID_CMD, cmd, 2);
+  uint8_t rpid; uint8_t tmp[64]; int tlen;
+  if (!fpReadPacket(&rpid, tmp, &tlen, sizeof(tmp), 2500)) return false;
+  if (rpid != FP_PID_ACK || tlen < 1 || tmp[0] != 0x00) return false;   // 0x00 = OK
+  const int CHUNK = 128;                                      // ส่งทีละ 128 ไบต์
+  for (int off = 0; off < TEMPLATE_SIZE; off += CHUNK) {
+    int len   = (TEMPLATE_SIZE - off < CHUNK) ? (TEMPLATE_SIZE - off) : CHUNK;
+    bool last = (off + len >= TEMPLATE_SIZE);
+    fpWritePacket(last ? FP_PID_END : FP_PID_DATA, buf + off, len);
+    delay(10);
+  }
+  delay(60);
+  return finger.storeModel(id) == FINGERPRINT_OK;            // CharBuffer1 -> flash slot id
+}
+
 // ===== ส่งข้อมูลเข้างาน =====
 void sendAttendance(int fingerId) {
   if (WiFi.status() != WL_CONNECTED) {
@@ -244,12 +381,38 @@ void sendAttendance(int fingerId) {
   showCheckin(name, fingerId, checkType, isLate);
 }
 
-// ===== แจ้ง Enroll สำเร็จ =====
+// ===== แจ้ง Enroll สำเร็จ (ไม่มี template — fallback) =====
 void notifyEnrollDone(int id) {
   String resp;
   httpPost(SERVER_URL + "/api/enroll-complete",
            "{\"finger_id\":" + String(id) + ",\"confidence\":50}",
            resp);
+}
+
+// ===== แจ้ง Enroll สำเร็จ พร้อมส่ง template จริง (สำหรับ sync หลายเครื่อง) =====
+void uploadEnrolledTemplate(int id) {
+  uint8_t buf[TEMPLATE_SIZE];
+  if (downloadTemplate(id, buf)) {
+    String b64 = b64encode(buf, TEMPLATE_SIZE);
+    if (b64.length() > 0) {
+      String resp;
+      bool ok = httpPost(SERVER_URL + "/api/enroll-complete",
+        "{\"finger_id\":" + String(id) + ",\"confidence\":50,\"template\":\"" + b64 + "\"}", resp);
+      if (ok) {
+        int vIdx = resp.indexOf("\"version\":");
+        if (vIdx >= 0) {
+          int v = resp.substring(vIdx + 10).toInt();
+          if (v > 0) {   // เครื่องนี้เพิ่งอัปโหลดเอง ถือว่า sync แล้ว ไม่ต้องดึงกลับ
+            localSyncVersion = v;
+            prefs.begin("atd", false); prefs.putInt("sync_v", v); prefs.end();
+          }
+        }
+        finger.getTemplateCount(); localTemplateCount = finger.templateCount;
+        return;
+      }
+    }
+  }
+  notifyEnrollDone(id);   // อ่าน template ไม่ได้ → อย่างน้อยมาร์คว่า enrolled
 }
 
 // ===== ลงทะเบียนนิ้ว =====
@@ -296,7 +459,7 @@ bool enrollFinger(int id) {
 
   showMsg("ENROLL OK!", "ID:" + String(id) + " saved", "", true);
   beepEnroll();
-  notifyEnrollDone(id);
+  uploadEnrolledTemplate(id);   // ส่ง template จริงขึ้น server → เครื่องอื่น sync ได้
   finger.getTemplateCount();
   clockEnabled = true;
   return true;
@@ -329,6 +492,66 @@ void pollSensorClearCmd() {
   String resp;
   if (!httpGet(SERVER_URL + "/api/sensor-clear-pending", resp)) return;
   if (resp.indexOf("\"pending\":true") >= 0) pendingSensorClear = true;
+}
+
+// ===== Poll เวอร์ชันชุดลายนิ้ว + รายงานสถานะเครื่อง (รันบน Core 0 — GET อย่างเดียว) =====
+void pollSyncCheck() {
+  String resp;
+  String url = SERVER_URL + "/api/sync-check?device_id=" + DEVICE_ID +
+               "&v=" + String(localSyncVersion) + "&count=" + String(localTemplateCount);
+  if (!httpGet(url, resp)) return;
+  int idx = resp.indexOf("\"version\":");
+  if (idx < 0) return;
+  int serverV = resp.substring(idx + 10).toInt();
+  if (serverV != localSyncVersion) pendingSync = true;   // มีอัปเดต → ต้อง sync
+}
+
+// ===== ดึง template ทั้งหมดจาก server มาลงเซนเซอร์ (รันบน Core 1 ใน loop) =====
+void syncTemplates() {
+  sensorBusy   = true;
+  clockEnabled = false;
+  showMsg("Syncing prints", "Please wait...", "");
+  String resp;
+  if (!httpGetBig(SERVER_URL + "/api/sync-templates", resp)) {
+    showMsg("Sync failed", "Retry later", "");
+    beepFail(); delay(1500);
+    clockEnabled = true; sensorBusy = false;
+    return;
+  }
+  int vIdx    = resp.indexOf("\"version\":");
+  int serverV = (vIdx >= 0) ? resp.substring(vIdx + 10).toInt() : localSyncVersion;
+
+  int count = 0, pos = 0;
+  while (true) {
+    esp_task_wdt_reset();
+    int fIdx = resp.indexOf("\"finger_id\":", pos);
+    if (fIdx < 0) break;
+    int id   = resp.substring(fIdx + 12).toInt();
+    int tIdx = resp.indexOf("\"template\":\"", fIdx);
+    if (tIdx < 0) break;
+    int tStart = tIdx + 12;
+    int tEnd   = resp.indexOf("\"", tStart);
+    if (tEnd < 0) break;
+    String b64 = resp.substring(tStart, tEnd);
+    pos = tEnd + 1;
+
+    uint8_t buf[TEMPLATE_SIZE + 8];
+    int n = b64decode(b64, buf, sizeof(buf));
+    if (n >= TEMPLATE_SIZE) {
+      showMsg("Syncing prints", "ID:" + String(id), "");
+      if (uploadTemplate(id, buf)) count++;
+    }
+  }
+
+  finger.getTemplateCount();
+  localTemplateCount = finger.templateCount;
+  localSyncVersion   = serverV;
+  prefs.begin("atd", false); prefs.putInt("sync_v", localSyncVersion); prefs.end();
+
+  showMsg("Sync done", String(count) + " prints ok", "", true);
+  beepEnroll(); delay(1800);
+  clockEnabled = true;
+  sensorBusy   = false;
 }
 
 // ===== ล้างเซนเซอร์จริง (รันบน Core 1 ใน loop) =====
@@ -423,6 +646,8 @@ void netTaskFunc(void *param) {
     if (WiFi.status() == WL_CONNECTED && !sensorBusy) {
       pollEnrollCmd();
       pollSensorClearCmd();
+      // เช็คเวอร์ชันชุดลายนิ้วทุก ~10 วินาที (เบา + รายงานสถานะเครื่อง)
+      if (millis() - lastSyncCheck > 10000) { lastSyncCheck = millis(); pollSyncCheck(); }
     }
     vTaskDelay(pdMS_TO_TICKS(3000));
   }
@@ -452,7 +677,7 @@ void setup() {
   lcdReady = true;
   Serial.printf("LCD I2C addr = 0x%02X\n", lcdAddr);
 
-  showMsg("Attendance Sys", "v6.1 realtime..", "");
+  showMsg("Attendance Sys", "v7 multi-sync..", "");
   delay(1000);
 
   fpSerial.begin(57600, SERIAL_8N1, FP_RX, FP_TX);
@@ -462,6 +687,7 @@ void setup() {
     while (true) delay(1000);
   }
   finger.getTemplateCount();
+  localTemplateCount = finger.templateCount;
   setFingerLED(false);
   showMsg("Fingerprint OK", "Count: " + String(finger.templateCount), "");
   delay(800);
@@ -470,6 +696,7 @@ void setup() {
   prefs.begin("atd", false);
   SERVER_URL = prefs.getString("server_url", DEFAULT_SERVER_URL);
   DEVICE_ID  = prefs.getString("device_id",  DEFAULT_DEVICE_ID);
+  localSyncVersion = prefs.getInt("sync_v", 0);   // เวอร์ชันชุดลายนิ้วที่ sync ไว้ล่าสุด
 
   // Migration: ถ้ายังเป็น "Main" (ค่าเก่า) ให้อัปเป็น OFFICE
   if (DEVICE_ID == "Main") {
@@ -555,6 +782,7 @@ void loop() {
   // คำสั่งจากเว็บ (netTask บน Core 0 ตั้ง flag ให้) — ทำบน Core 1 เพื่อใช้เซนเซอร์ที่ core เดียว
   if (pendingSensorClear) { pendingSensorClear = false; doSensorClear(); return; }
   if (pendingEnrollId >= 0) { int fid = pendingEnrollId; pendingEnrollId = -1; runEnroll(fid); return; }
+  if (pendingSync) { pendingSync = false; syncTemplates(); return; }
 
   // Reinit sensor ทุก 10 นาที เพื่อล้าง UART state สะสม
   if (millis() - lastSensorReinit > 600000UL) reinitSensor();

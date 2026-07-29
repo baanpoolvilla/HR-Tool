@@ -265,6 +265,7 @@ tbody tr:hover td { background: var(--surface-2); }
 .btn-success { background: var(--success); color: #fff; }
 .btn-danger  { background: var(--danger); color: #fff; }
 .btn-warning { background: var(--warning); color: #fff; }
+.btn-info    { background: var(--info, #0ea5e9); color: #fff; }
 .btn-enroll  { background: var(--purple); color: #fff; }
 .btn-ghost   { background: var(--surface-2); color: var(--text); border-color: var(--border); }
 .btn-ghost:hover { background: var(--primary-soft); }
