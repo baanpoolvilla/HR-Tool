@@ -593,6 +593,9 @@ app.get('/api/sensor-clear-pending', requireDeviceKey, (req, res) => {
 // WEB — request sensor clear
 app.post('/api/sensor-clear-request', requireAdmin, async (req, res) => {
   sensorClearPending = true;
+  // เซนเซอร์กำลังจะถูก emptyDatabase() → รีเซ็ตสถานะลงทะเบียนใน DB ให้ตรงกัน
+  // (ทุกคนต้องลงทะเบียนนิ้วใหม่) กันหน้าเว็บโชว์ "ลงทะเบียนแล้ว" ทั้งที่เซนเซอร์ว่าง
+  await pool.query('UPDATE fp_users SET enrolled = FALSE, confidence = 0, fp_pattern = NULL');
   await logAudit('sensor_clear_request', null, {}, req);
   res.json({ success: true });
 });
@@ -600,6 +603,8 @@ app.post('/api/sensor-clear-request', requireAdmin, async (req, res) => {
 // ADMIN — reset all data
 app.delete('/api/admin/reset', requireAdmin, async (req, res) => {
   await pool.query('TRUNCATE attendance_logs, fp_users, monthly_commissions RESTART IDENTITY');
+  // ล้างข้อมูลทั้งหมดต้องล้าง template ในเซนเซอร์ด้วย ไม่งั้น slot เก่าค้าง → match ผิดคน
+  sensorClearPending = true;
   await logAudit('admin_reset', null, {}, req);
   res.json({ success: true });
 });
