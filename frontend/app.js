@@ -322,13 +322,13 @@ async function loadUsers() {
             </div>
           </div>
         </td>
-        <td>${u.name}</td>
+        <td>${u.nickname ? `<strong>${u.nickname}</strong> <span class="muted" style="font-size:12px">(${u.name})</span>` : u.name}</td>
         <td>${u.employee_id || '-'}</td>
         <td>${u.department  || '-'}</td>
         <td>${badge}</td>
         <td style="display:flex;gap:6px;flex-wrap:wrap">
-          <button class="btn btn-enroll" onclick="startEnroll(${u.finger_id},'${u.name}')">👆 ลงทะเบียนนิ้ว</button>
-          <button class="btn btn-primary" onclick="editUser(${u.finger_id},'${u.name}','${u.employee_id||''}','${u.department||''}',${u.base_salary||0},${u.attendance_bonus||0},'${u.work_start_time||'08:00'}',${u.late_grace_minutes||15},'${u.checkout_start_time||'17:00'}',${u.shift_id||'null'},${u.sso_enabled||false},${u.pf_percent||0},${u.tax_enabled||false})">✏️</button>
+          <button class="btn btn-enroll" onclick="startEnroll(${u.finger_id},'${(u.nickname||u.name).replace(/'/g,"\\'")}')">👆 ลงทะเบียนนิ้ว</button>
+          <button class="btn btn-primary" onclick='editUser(${JSON.stringify(u)})'>✏️</button>
           <button class="btn btn-danger"  onclick="deleteUser(${u.finger_id})">🗑️</button>
         </td>
       </tr>`;
@@ -427,7 +427,7 @@ function cancelEnroll() {
 // ===== Save / Edit / Delete =====
 async function openAddEmp() {
   document.getElementById('emp-modal-title').textContent = '➕ เพิ่มพนักงาน';
-  ['f-finger-id','f-name','f-emp-id','f-dept','f-salary','f-bonus','f-grace','f-pf'].forEach(id => {
+  ['f-finger-id','f-name','f-nickname','f-emp-id','f-dept','f-salary','f-bonus','f-grace','f-pf'].forEach(id => {
     document.getElementById(id).value = '';
   });
   document.getElementById('f-shift').value = '';
@@ -441,21 +441,22 @@ async function openAddEmp() {
   openModal('emp-modal');
 }
 
-function editUser(fid, name, empId, dept, salary, bonus, startTime, grace, checkoutTime, shiftId, ssoEnabled, pfPercent, taxEnabled) {
+function editUser(u) {
   document.getElementById('emp-modal-title').textContent = '✏️ แก้ไขพนักงาน';
-  document.getElementById('f-finger-id').value     = fid;
-  document.getElementById('f-name').value           = name;
-  document.getElementById('f-emp-id').value         = empId;
-  document.getElementById('f-dept').value           = dept;
-  document.getElementById('f-salary').value         = salary       || 0;
-  document.getElementById('f-bonus').value          = bonus        || 0;
-  document.getElementById('f-start-time').value     = startTime    || '08:00';
-  document.getElementById('f-grace').value          = grace        || 15;
-  document.getElementById('f-checkout-time').value  = checkoutTime || '17:00';
-  document.getElementById('f-shift').value          = (shiftId !== null && shiftId !== undefined) ? String(shiftId) : '';
-  document.getElementById('f-sso').checked          = ssoEnabled === true;
-  document.getElementById('f-pf').value             = pfPercent    || 0;
-  document.getElementById('f-tax').checked          = taxEnabled === true;
+  document.getElementById('f-finger-id').value     = u.finger_id;
+  document.getElementById('f-name').value           = u.name || '';
+  document.getElementById('f-nickname').value        = u.nickname || '';
+  document.getElementById('f-emp-id').value         = u.employee_id || '';
+  document.getElementById('f-dept').value           = u.department  || '';
+  document.getElementById('f-salary').value         = u.base_salary      || 0;
+  document.getElementById('f-bonus').value          = u.attendance_bonus || 0;
+  document.getElementById('f-start-time').value     = u.work_start_time     || '08:00';
+  document.getElementById('f-grace').value          = u.late_grace_minutes  || 15;
+  document.getElementById('f-checkout-time').value  = u.checkout_start_time || '17:00';
+  document.getElementById('f-shift').value          = (u.shift_id !== null && u.shift_id !== undefined) ? String(u.shift_id) : '';
+  document.getElementById('f-sso').checked          = u.sso_enabled === true;
+  document.getElementById('f-pf').value             = u.pf_percent  || 0;
+  document.getElementById('f-tax').checked          = u.tax_enabled === true;
   document.getElementById('f-finger-id').readOnly   = true;   // ห้ามแก้ Finger ID ตอนแก้ไข
   document.getElementById('user-status').className  = 'status';
   onShiftChange();
@@ -465,6 +466,7 @@ function editUser(fid, name, empId, dept, salary, bonus, startTime, grace, check
 async function saveUser() {
   const finger_id           = document.getElementById('f-finger-id').value;
   const name                = document.getElementById('f-name').value;
+  const nickname            = document.getElementById('f-nickname').value;
   const employee_id         = document.getElementById('f-emp-id').value;
   const department          = document.getElementById('f-dept').value;
   const base_salary         = parseFloat(document.getElementById('f-salary').value) || 0;
@@ -487,7 +489,7 @@ async function saveUser() {
   const res = await api('/api/users', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ finger_id: parseInt(finger_id), name, employee_id, department,
+    body: JSON.stringify({ finger_id: parseInt(finger_id), name, nickname, employee_id, department,
                            base_salary, attendance_bonus, work_start_time, late_grace_minutes,
                            checkout_start_time, shift_id, sso_enabled, pf_percent, tax_enabled }),
   });

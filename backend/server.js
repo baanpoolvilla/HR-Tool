@@ -213,6 +213,7 @@ async function initDB() {
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS enrolled BOOLEAN DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS fp_pattern TEXT;`);
   await pool.query(`UPDATE fp_users SET enrolled = TRUE WHERE confidence > 0;`);
+  await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS nickname VARCHAR(100) DEFAULT '';`);
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS base_salary DECIMAL(10,2) DEFAULT 0;`);
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS attendance_bonus DECIMAL(10,2) DEFAULT 0;`);
   await pool.query(`ALTER TABLE fp_users ADD COLUMN IF NOT EXISTS work_start_time VARCHAR(8) DEFAULT '08:00';`);
@@ -437,7 +438,8 @@ app.post('/api/attendance', requireDeviceKey, async (req, res) => {
     [finger_id]
   );
   const userRow = user.rows[0];
-  const name    = userRow ? userRow.name : 'Unknown';
+  // ชื่อที่แสดงบนหน้าจอสแกน/LINE/ตาราง = ชื่อเล่น (ถ้ามี) ไม่งั้น fallback ชื่อจริง
+  const name    = userRow ? ((userRow.nickname && userRow.nickname.trim()) || userRow.name) : 'Unknown';
 
   // เวลาปัจจุบัน Bangkok (UTC+7)
   const bangkokNow = toTH(new Date());
@@ -610,21 +612,21 @@ app.get('/api/users', requireAdmin, async (req, res) => {
 
 // WEB — upsert user (with payroll settings)
 app.post('/api/users', requireAdmin, async (req, res) => {
-  const { finger_id, name, employee_id, department,
+  const { finger_id, name, nickname, employee_id, department,
           base_salary, attendance_bonus, work_start_time, late_grace_minutes,
           checkout_start_time, shift_id, sso_enabled, pf_percent, tax_enabled } = req.body;
   await pool.query(`
     INSERT INTO fp_users
-      (finger_id, name, employee_id, department, base_salary, attendance_bonus,
+      (finger_id, name, nickname, employee_id, department, base_salary, attendance_bonus,
        work_start_time, late_grace_minutes, checkout_start_time, shift_id, sso_enabled,
        pf_percent, tax_enabled)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
     ON CONFLICT (finger_id) DO UPDATE SET
-      name=$2, employee_id=$3, department=$4,
-      base_salary=$5, attendance_bonus=$6,
-      work_start_time=$7, late_grace_minutes=$8, checkout_start_time=$9,
-      shift_id=$10, sso_enabled=$11, pf_percent=$12, tax_enabled=$13
-  `, [finger_id, name, employee_id, department,
+      name=$2, nickname=$3, employee_id=$4, department=$5,
+      base_salary=$6, attendance_bonus=$7,
+      work_start_time=$8, late_grace_minutes=$9, checkout_start_time=$10,
+      shift_id=$11, sso_enabled=$12, pf_percent=$13, tax_enabled=$14
+  `, [finger_id, name, nickname || '', employee_id, department,
       base_salary || 0, attendance_bonus || 0,
       work_start_time || '08:00', late_grace_minutes || 15,
       checkout_start_time || '17:00', shift_id ? parseInt(shift_id) : null,
